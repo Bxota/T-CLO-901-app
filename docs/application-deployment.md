@@ -18,6 +18,17 @@ immutable SHA tag; do not replace it with `latest` or another mutable tag. The
 chart schema rejects `latest` and any application image outside
 `ghcr.io/bxota/`.
 
+Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
+access token limited to `write:packages`/`read:packages`. The GHCR packages
+were created by that token and are not linked to the repository, so the
+default `GITHUB_TOKEN` is denied (`permission_denied: write_package`). The
+chart tag commit still uses `GITHUB_TOKEN`, whose pushes do not retrigger the
+workflow. `GHCR_PUSH_TOKEN` is a CI-only credential: never place it in the
+cluster, which uses the separate read-only pull secret described below. Exactly
+one workflow may commit the chart image tag; a second tag-bumping workflow
+(such as the former `build-and-push.yml`) races with this one and rewrites
+`values.yaml` with `yq -i`, stripping its comments and blank lines.
+
 ## Admission policy and image mirror contract
 
 The infrastructure repository's `ValidatingAdmissionPolicy`
