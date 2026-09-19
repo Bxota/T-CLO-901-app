@@ -29,6 +29,8 @@ env:
 secret:
   name: mysql-credentials
   passwordKey: mysql-password
+  rootPasswordKey: mysql-root-password
+  appKeyKey: app-key
 
 probes:
   readiness:
@@ -54,10 +56,30 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# One-shot `php artisan migrate --force` Job (Argo CD Sync hook, wave 3).
+migration:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Vendor images. The app namespace admission policy only admits images under
+# ghcr.io/bxota/, so every vendor image is a CI-maintained mirror of a pinned
+# upstream tag (see .github/workflows/build-publish.yml, job mirror-vendor-images).
 mysql:
   enabled: true
   fullnameOverride: mysql
   architecture: standalone
+  image:
+    registry: ghcr.io
+    repository: bxota/bitnami-mysql
+    # Mirror of docker.io/bitnamilegacy/mysql:8.0.37-debian-12-r2 (the chart 10.3.0 default image).
+    tag: 8.0.37-debian-12-r2
+    pullSecrets:
+      - ghcr-pull-secret
   commonAnnotations:
     argocd.argoproj.io/sync-wave: "1"
   auth:
@@ -88,9 +110,51 @@ efs:
   backupPath: /mysql-backups
   mountOptions:
     - nfsvers=4.1
+  # Bitnami MySQL runs as UID/GID 1001; the backup, restore-test and restore
+  # pods run as the official mysql image's UID/GID 999. EFS ignores fsGroup,
+  # so the bootstrap Job chowns each export directory to its consumer.
+  dataOwner: "1001:1001"
+  backupOwner: "999:999"
+
+bootstrap:
+  # Mirror of docker.io/library/busybox:1.37.0.
+  image: ghcr.io/bxota/busybox:1.37.0
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
 
 backup:
   schedule: "17 2 * * *"
   restoreTestSchedule: "31 3 * * 0"
+  # Dumps older than this many days are deleted after each successful dump,
+  # so exactly retentionDays daily dumps are kept.
   retentionDays: 7
-  image: mysql:8.0.37
+  # Mirror of docker.io/library/mysql:8.0.37; same major/minor as the server.
+  image: ghcr.io/bxota/mysql:8.0.37
+  # UID/GID of the `mysql` user inside the official mysql image.
+  runAsUser: 999
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  restoreTestResources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Break-glass production restore. Never enabled in the committed default; the
+# runbook's "Production data restore" procedure flips it in a reviewed commit.
+restore:
+  enabled: false
+  # Basename of a dump under the mysql-backups PVC, for example app-2026-09-19T02-17-00Z.sql.gz
+  dumpFile: ""

@@ -1,0 +1,75 @@
+{{- if .Values.restore.enabled }}
+# Break-glass production restore, rendered only when restore.enabled is true in
+# a reviewed commit (see the runbook's "Production data restore" procedure).
+# Sync wave 2: after MySQL (1) is Healthy, before the migration Job (3) and the
+# Deployment (4). BeforeHookCreation lets a later commit with another dumpFile
+# re-run it despite Job immutability.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql-restore
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-restore") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-restore") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        {{- range .Values.image.pullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      securityContext:
+        {{- include "laravel.mysqlToolsPodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: restore
+          image: {{ .Values.backup.image | quote }}
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: {{ .Values.secret.rootPasswordKey }}
+            - name: DUMP_FILE
+              value: {{ .Values.restore.dumpFile | quote }}
+          command: ["sh", "-ec"]
+          args:
+            - |
+              dump="/backup/${DUMP_FILE}"
+              test -s "$dump"
+              echo "restoring $dump into {{ .Values.env.DB_DATABASE }} on {{ .Values.env.DB_HOST }}"
+              # Grants on {{ .Values.env.DB_DATABASE }}.* survive DROP/CREATE DATABASE, so the
+              # application user keeps its access without touching mysql.* tables.
+              mysql --host={{ .Values.env.DB_HOST }} --port={{ .Values.env.DB_PORT }} --user=root \
+                -e 'DROP DATABASE IF EXISTS {{ .Values.env.DB_DATABASE }}; CREATE DATABASE {{ .Values.env.DB_DATABASE }};'
+              gzip -cd "$dump" > /tmp/restore.sql
+              mysql --host={{ .Values.env.DB_HOST }} --port={{ .Values.env.DB_PORT }} --user=root {{ .Values.env.DB_DATABASE }} < /tmp/restore.sql
+              mysql --host={{ .Values.env.DB_HOST }} --port={{ .Values.env.DB_PORT }} --user=root {{ .Values.env.DB_DATABASE }} \
+                -e 'SELECT COUNT(*) AS migrations FROM migrations;'
+              echo "restore succeeded"
+          securityContext:
+            {{- include "laravel.restrictedContainerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backup.restoreTestResources | nindent 12 }}
+          volumeMounts:
+            - name: backups
+              mountPath: /backup
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: mysql-backups
+        - name: scratch
+          emptyDir: {}
+{{- end }}

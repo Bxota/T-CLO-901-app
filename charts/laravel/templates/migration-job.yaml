@@ -2,19 +2,23 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "laravel.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "laravel.labels" . | nindent 4 }}
+    {{- include "laravel.maintenanceLabels" (dict "root" . "component" "migrate") | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook": PreSync
-    "argocd.argoproj.io/sync-wave": "-1"
+    # Argo CD owns the hook lifecycle (no helm.sh/hook: Argo CD is the only
+    # deployment path). Sync wave 3 runs after MySQL (1) is Healthy and after an
+    # optional restore Job (2), and before the Deployment (4) is applied.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   backoffLimit: 2
+  activeDeadlineSeconds: 600
   template:
     metadata:
       labels:
-        {{- include "laravel.labels" . | nindent 8 }}
+        {{- include "laravel.maintenanceLabels" (dict "root" . "component" "migrate") | nindent 8 }}
     spec:
       restartPolicy: OnFailure
       imagePullSecrets:
@@ -39,4 +43,6 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secret.name }}
-                  key: app-key
+                  key: {{ .Values.secret.appKeyKey }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}

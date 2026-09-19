@@ -4,6 +4,8 @@ metadata:
   name: mysql-backups
   labels:
     app.kubernetes.io/component: mysql-backups
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   capacity:
     storage: 20Gi
@@ -20,7 +22,12 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mysql-backups
-  namespace: app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql-backups
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   accessModes: [ReadWriteMany]
   resources:

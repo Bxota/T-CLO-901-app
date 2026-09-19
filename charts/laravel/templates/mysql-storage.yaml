@@ -1,19 +1,49 @@
+# Runs on every sync before anything else (same pattern as the Loki EFS
+# bootstrap in the infra repository). It only creates the two export
+# directories and hands each one to its consumer UID; it never deletes data.
+# Non-recursive chown: MySQL owns the files it creates itself.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "laravel.fullname" . }}-efs-bootstrap
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.maintenanceLabels" (dict "root" . "component" "efs-bootstrap") | nindent 4 }}
   annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     argocd.argoproj.io/sync-wave: "0"
 spec:
   backoffLimit: 3
+  activeDeadlineSeconds: 300
   template:
+    metadata:
+      labels:
+        {{- include "laravel.maintenanceLabels" (dict "root" . "component" "efs-bootstrap") | nindent 8 }}
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        {{- range .Values.image.pullSecrets }}
+        - name: {{ . }}
+        {{- end }}
       containers:
         - name: mkdir
-          image: busybox:1.37.0
-          command: ["sh", "-c", "mkdir -p /export/mysql-data /export/mysql-backups && chmod 0770 /export/mysql-data /export/mysql-backups"]
+          image: {{ .Values.bootstrap.image | quote }}
+          command: ["sh", "-ec"]
+          args:
+            - |
+              mkdir -p /export{{ .Values.efs.dataPath }} /export{{ .Values.efs.backupPath }}
+              chown {{ .Values.efs.dataOwner }} /export{{ .Values.efs.dataPath }}
+              chown {{ .Values.efs.backupOwner }} /export{{ .Values.efs.backupPath }}
+              chmod 0770 /export{{ .Values.efs.dataPath }} /export{{ .Values.efs.backupPath }}
+          # Runs as root on purpose: it must chown EFS directories to their consumer UIDs.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER, DAC_OVERRIDE]
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
           volumeMounts:
             - name: efs-root
               mountPath: /export

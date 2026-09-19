@@ -4,6 +4,10 @@ metadata:
   name: {{ include "laravel.fullname" . }}
   labels:
     {{- include "laravel.labels" . | nindent 4 }}
+  annotations:
+    # Argo CD sync order: EFS bootstrap (PreSync) -> PV/PVC/config (0) -> MySQL (1)
+    # -> optional restore Job (2) -> migration Job (3) -> this Deployment (4).
+    argocd.argoproj.io/sync-wave: "4"
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
@@ -52,7 +56,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secret.name }}
-                  key: app-key
+                  key: {{ .Values.secret.appKeyKey }}
           readinessProbe:
             httpGet:
               path: {{ .Values.probes.readiness.path }}
