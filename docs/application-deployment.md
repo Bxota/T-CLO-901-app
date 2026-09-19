@@ -115,37 +115,47 @@ use this command shape:
 kubeseal --format yaml --cert sealed-secrets-public-cert.pem < mysql-credentials.secret.yaml > charts/laravel/templates/mysql-credentials.sealedsecret.yaml
 ```
 
-Until the Sealed Secrets controller (section 7) is installed, both Secrets are
-created once by hand on `kube-1`, with values generated on the spot and never
-written to a file or to Git. The Bitnami chart and Laravel read them by name,
-so the deployment stays blocked in `CreateContainerConfigError`
-(`secret "mysql-credentials" not found`) until they exist:
+Both Secrets are committed as `SealedSecret` manifests in
+`charts/laravel/templates/` (`mysql-credentials.sealedsecret.yaml`,
+`ghcr-pull-secret.sealedsecret.yaml`), synced at wave 0 with
+`SkipDryRunOnMissingResource=true` because their CRD comes from the platform
+Application. The controller in `kube-system` decrypts them into the plain
+Secrets the chart references. To rotate a value, seal a new Secret with the
+committed certificate and commit the result; never edit the plain Secret:
 
 ```bash
-sudo k3s kubectl -n app create secret generic mysql-credentials \
+kubectl create secret generic mysql-credentials --namespace app \
   --from-literal=mysql-root-password="$(openssl rand -base64 24)" \
   --from-literal=mysql-password="$(openssl rand -base64 24)" \
-  --from-literal=app-key="base64:$(openssl rand -base64 32)"
-
-read -rs GHCR_READ_TOKEN   # a PAT with read:packages only
-sudo k3s kubectl -n app create secret docker-registry ghcr-pull-secret \
-  --docker-server=ghcr.io --docker-username=Bxota --docker-password="$GHCR_READ_TOKEN" \
-  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
-unset GHCR_READ_TOKEN
+  --from-literal=app-key="base64:$(openssl rand -base64 32)" \
+  --dry-run=client -o yaml \
+  | kubeseal --cert <infrastructure-repository>/sealed-secrets/pub-cert.pem --format yaml \
+  > charts/laravel/templates/mysql-credentials.sealedsecret.yaml
 ```
 
-The `--dry-run=client -o yaml | apply` form also replaces a wrong token in an
-existing `ghcr-pull-secret`. A pod created before the fix keeps failing to
-pull until it is deleted (`kubectl -n app delete pod <name>`; the Job or
-ReplicaSet recreates it). Pull failures show as `403 Forbidden` on
-`ghcr.io/token` when the token lacks access to a private package.
+Rotating `mysql-root-password` or `mysql-password` on an initialised MySQL
+data directory does **not** change the passwords MySQL knows; run the matching
+`ALTER USER` first, in a maintenance window. The full sealing workflow, key
+backup and rebuild procedure are in the root repository's
+`docs/runbooks/07-secrets-registry.md`. A first-ever cluster with no sealed
+manifests yet is the only case where Secrets are created by hand, and that
+step is documented there too.
+
+To replace a wrong or rotated pull token, seal a new `ghcr-pull-secret` the
+same way (`kubectl create secret docker-registry ghcr-pull-secret --namespace
+app --docker-server=ghcr.io --docker-username=Bxota
+--docker-password=<read-only token> --dry-run=client -o yaml | kubeseal --cert
+<infrastructure-repository>/sealed-secrets/pub-cert.pem --format yaml`) and
+commit it. A pod created before the fix keeps failing to pull until it is
+deleted (`kubectl -n app delete pod <name>`; the Job or ReplicaSet recreates
+it). Pull failures show as `403 Forbidden` on `ghcr.io/token` when the token
+lacks access to a private package.
 
 The plaintext input file must remain outside the repository and be deleted
-securely after sealing. Apply the same process to the Docker config JSON for
-`ghcr-pull-secret`. Its token has read-only package-pull access only; it must
-not be a GHCR push token, and it must be able to read the mirrored vendor
-packages listed above (same GHCR owner). The Deployment, migration Job and
-backup jobs use `mysql-password`; only the break-glass restore Job uses
+securely after sealing. Its token has read-only package-pull access only; it
+must not be a GHCR push token, and it must be able to read the mirrored
+vendor packages listed above (same GHCR owner). The Deployment, migration Job
+and backup jobs use `mysql-password`; only the break-glass restore Job uses
 `mysql-root-password`; every pod template references `ghcr-pull-secret`.
 
 ## Build, render, and deploy
