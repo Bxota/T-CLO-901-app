@@ -9,18 +9,57 @@ permissions:
   contents: write
   packages: write
 
+env:
+  APP_IMAGE: ghcr.io/bxota/t-clo-901-app
+
 jobs:
+  # The app namespace admission policy only admits images under ghcr.io/bxota/.
+  # Every vendor image the chart runs is therefore mirrored here, pinned by tag,
+  # from its upstream source. The job is idempotent: re-pushing an identical
+  # manifest is a no-op. Keep this list aligned with charts/laravel/values.yaml
+  # and the "Image mirror contract" table in docs/application-deployment.md.
+  mirror-vendor-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        image:
+          - source: docker.io/bitnamilegacy/mysql:8.0.37-debian-12-r2
+            target: ghcr.io/bxota/bitnami-mysql:8.0.37-debian-12-r2
+          - source: docker.io/library/mysql:8.0.37
+            target: ghcr.io/bxota/mysql:8.0.37
+          - source: docker.io/library/busybox:1.37.0
+            target: ghcr.io/bxota/busybox:1.37.0
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mirror ${{ matrix.image.source }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ matrix.image.target }}" \
+            "${{ matrix.image.source }}"
+          docker buildx imagetools inspect "${{ matrix.image.target }}" >/dev/null
+
   test-build-publish:
+    needs: mirror-vendor-images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: pdo_mysql
+          extensions: pdo_mysql, pdo_sqlite, sqlite3
           coverage: none
       - run: composer install --no-interaction --prefer-dist
       - run: php artisan test
+      - name: Validate the Helm chart
+        run: |
+          helm lint charts/laravel --set image.tag="${GITHUB_SHA}"
+          helm template app charts/laravel --namespace app --set image.tag="${GITHUB_SHA}" >/dev/null
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -30,12 +69,20 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/bxota/t-clo-901-app:${{ github.sha }}
+          tags: ${{ env.APP_IMAGE }}:${{ github.sha }}
       - name: Update immutable Helm image tag
         run: |
-          sed -i 's/tag: ".*"/tag: "${GITHUB_SHA}"/' charts/laravel/values.yaml
+          # Only the application image tag (a full 40-hex commit SHA) is rewritten;
+          # the MySQL dependency tag lives under mysql.image and is left untouched.
+          sed -i -E "s|^(  tag: )\"[0-9a-f]{40}\"$|\1\"${GITHUB_SHA}\"|" charts/laravel/values.yaml
+          grep -q "^  tag: \"${GITHUB_SHA}\"$" charts/laravel/values.yaml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add charts/laravel/values.yaml
-          git commit -m "chore: update image to ${GITHUB_SHA}" || exit 0
-          git push
+          if git diff --cached --quiet; then
+            echo "Image tag already up to date"
+            exit 0
+          fi
+          git commit -m "chore: update image to ${GITHUB_SHA}"
+          git pull --rebase origin main
+          git push origin HEAD:main
