@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["image", "secret", "efs", "mysql", "bootstrap", "backup", "restore"],
+  "required": ["image", "secret", "efs", "mysql", "bootstrap", "backup", "restore", "route"],
   "properties": {
     "replicaCount": {
       "type": "integer",
@@ -71,6 +71,23 @@
           "minimum": 1
         },
         "runAsUser": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["enabled", "host", "gateway"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "host": { "type": "string", "minLength": 1 },
+        "gateway": {
+          "type": "object",
+          "required": ["name", "namespace", "sectionName"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "namespace": { "type": "string", "minLength": 1 },
+            "sectionName": { "type": "string", "minLength": 1 }
+          }
+        }
       }
     },
     "restore": {

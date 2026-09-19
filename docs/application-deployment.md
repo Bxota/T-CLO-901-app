@@ -18,6 +18,15 @@ immutable SHA tag; do not replace it with `latest` or another mutable tag. The
 chart schema rejects `latest` and any application image outside
 `ghcr.io/bxota/`.
 
+The cluster nodes are `arm64` (Graviton) while GitHub runners are `amd64`,
+so the image is published as a multi-arch manifest (`linux/amd64,linux/arm64`,
+built through QEMU). An amd64-only image fails on the nodes with
+`no match for platform in manifest`. Check with:
+
+```bash
+kubectl get nodes -o custom-columns='NODE:.metadata.name,ARCH:.status.nodeInfo.architecture'
+```
+
 Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
 access token limited to `write:packages`/`read:packages`. The GHCR packages
 were created by that token and are not linked to the repository, so the
@@ -59,8 +68,9 @@ auto-syncs a merged commit immediately, before that run's mirror job has
 finished, so run the workflow once by hand (`workflow_dispatch`) before the
 first merge of a new vendor tag; otherwise the MySQL and bootstrap pods sit in
 `ImagePullBackOff` until the mirror lands, then recover on their own. The mirror
-packages are private GHCR packages of the same owner, so the read-only
-`ghcr-pull-secret` token pulls them as well; every pod template, including the
+packages must be private GHCR packages of the same owner (a package created
+by CI is public by default: set its visibility to private in the package
+settings), so the read-only `ghcr-pull-secret` token pulls them as well; every pod template, including the
 Bitnami StatefulSet (`mysql.image.pullSecrets`), references that pull secret.
 
 Local pre-check of the same rules (no cluster needed): the first command lists
@@ -104,6 +114,31 @@ use this command shape:
 ```bash
 kubeseal --format yaml --cert sealed-secrets-public-cert.pem < mysql-credentials.secret.yaml > charts/laravel/templates/mysql-credentials.sealedsecret.yaml
 ```
+
+Until the Sealed Secrets controller (section 7) is installed, both Secrets are
+created once by hand on `kube-1`, with values generated on the spot and never
+written to a file or to Git. The Bitnami chart and Laravel read them by name,
+so the deployment stays blocked in `CreateContainerConfigError`
+(`secret "mysql-credentials" not found`) until they exist:
+
+```bash
+sudo k3s kubectl -n app create secret generic mysql-credentials \
+  --from-literal=mysql-root-password="$(openssl rand -base64 24)" \
+  --from-literal=mysql-password="$(openssl rand -base64 24)" \
+  --from-literal=app-key="base64:$(openssl rand -base64 32)"
+
+read -rs GHCR_READ_TOKEN   # a PAT with read:packages only
+sudo k3s kubectl -n app create secret docker-registry ghcr-pull-secret \
+  --docker-server=ghcr.io --docker-username=Bxota --docker-password="$GHCR_READ_TOKEN" \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+unset GHCR_READ_TOKEN
+```
+
+The `--dry-run=client -o yaml | apply` form also replaces a wrong token in an
+existing `ghcr-pull-secret`. A pod created before the fix keeps failing to
+pull until it is deleted (`kubectl -n app delete pod <name>`; the Job or
+ReplicaSet recreates it). Pull failures show as `403 Forbidden` on
+`ghcr.io/token` when the token lacks access to a private package.
 
 The plaintext input file must remain outside the repository and be deleted
 securely after sealing. Apply the same process to the Docker config JSON for
@@ -151,7 +186,7 @@ migrations run and migrations complete before the Deployment is applied.
 | Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
 | Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
 | Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
-| Sync 4 | `Deployment/laravel` | Rolls out only after migrations succeeded. |
+| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
 
 The `laravel` Service and Deployment select on
 `app.kubernetes.io/component=web` in addition to name/instance, so hook and
@@ -212,6 +247,8 @@ kubectl -n app get deploy,pods,svc,pvc,job,cronjob
 kubectl -n app rollout status deployment/laravel --timeout=5m
 kubectl -n app get pvc data-mysql-0 mysql-backups
 kubectl -n app get svc laravel -o jsonpath='{.spec.ports[0].port}{"\n"}'
+kubectl -n app get httproute laravel -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{" "}{end}{"\n"}'
+curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n' https://app.15.224.195.86.sslip.io/
 kubectl -n app get endpointslice -l kubernetes.io/service-name=laravel \
   -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.conditions.ready}{"\n"}{end}'
 
@@ -224,7 +261,10 @@ curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n
 The expected evidence is `Synced` and `Healthy`, two Ready Laravel pods, a
 Ready MySQL pod, Bound `data-mysql-0` and `mysql-backups` PVCs, a completed
 migration Job, both backup CronJobs, Service port `80`, exactly the two web
-pods listed as `ready=true` endpoints, and an HTTP `200` through the Service.
+pods listed as `ready=true` endpoints, the HTTPRoute reporting `Accepted=True`
+and `ResolvedRefs=True`, an HTTP `200` on the public URL, and an HTTP `200`
+through the Service. A `404` from the public URL with a healthy Deployment
+means the HTTPRoute is missing or not accepted by the Gateway.
 The port-forward request is the "Service answers" evidence; the port number
 alone only proves the spec. Stop and diagnose an unbound PVC, incomplete
 migration, or non-Healthy Application before any resilience demo.
@@ -237,7 +277,7 @@ Laravel's `web` middleware and captures the session cookie; `/api/counter/add`
 creates a durable counter record. Use the same cookie jar after each restart:
 
 ```bash
-APP_URL="${APP_URL:?set this to the Laravel Service or route URL}"
+APP_URL="${APP_URL:-https://app.15.224.195.86.sslip.io}"
 COOKIE_JAR="$(mktemp)"
 
 curl --fail --show-error --cookie-jar "$COOKIE_JAR" "$APP_URL/" >/dev/null

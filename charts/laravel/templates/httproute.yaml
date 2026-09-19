@@ -1,0 +1,26 @@
+{{- if .Values.route.enabled }}
+# Public entry point through the shared Envoy Gateway (infrastructure
+# repository, platform/networking): the Gateway's https listener already
+# terminates TLS with the app-tls certificate and accepts routes from every
+# namespace, so the chart only has to bind the hostname to its own Service.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "laravel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  parentRefs:
+    - name: {{ .Values.route.gateway.name }}
+      namespace: {{ .Values.route.gateway.namespace }}
+      sectionName: {{ .Values.route.gateway.sectionName }}
+  hostnames:
+    - {{ .Values.route.host | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "laravel.fullname" . }}
+          port: {{ .Values.service.port }}
+{{- end }}
