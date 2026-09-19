@@ -43,7 +43,11 @@ returns `404` and only the `bitnamilegacy` copy exists, which is why the mirror
 source is `bitnamilegacy`. The chart schema enforces the mirror contract:
 `mysql.image.registry` must be `ghcr.io` and every vendor image value must start
 with `ghcr.io/bxota/`. When a vendor tag changes, update the workflow matrix
-and `values.yaml` in the same commit, and keep this table aligned. The mirror
+and `values.yaml` in the same commit, and keep this table aligned. Argo CD
+auto-syncs a merged commit immediately, before that run's mirror job has
+finished, so run the workflow once by hand (`workflow_dispatch`) before the
+first merge of a new vendor tag; otherwise the MySQL and bootstrap pods sit in
+`ImagePullBackOff` until the mirror lands, then recover on their own. The mirror
 packages are private GHCR packages of the same owner, so the read-only
 `ghcr-pull-secret` token pulls them as well; every pod template, including the
 Bitnami StatefulSet (`mysql.image.pullSecrets`), references that pull secret.
@@ -53,11 +57,11 @@ each pod template's name label and images, the second must print nothing.
 
 ```bash
 helm template app charts/laravel --namespace app --set image.tag=test-sha > /tmp/laravel-rendered.yaml
-yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
+yq -N -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
   | (.spec.template // .spec.jobTemplate.spec.template) as $t
   | .kind + "/" + .metadata.name + " name=" + ($t.metadata.labels["app.kubernetes.io/name"] // "MISSING")
     + " images=" + ([$t.spec.containers[].image] | join(","))' /tmp/laravel-rendered.yaml
-yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
+yq -N -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
   | (.spec.template // .spec.jobTemplate.spec.template) as $t
   | $t.spec.containers[] | select(.resources.requests == null or .resources.limits == null)
   | "NO-RESOURCES " + .name' /tmp/laravel-rendered.yaml
@@ -134,8 +138,8 @@ migrations run and migrations complete before the Deployment is applied.
 | PreSync 0 | `Job/laravel-efs-bootstrap` (re-created on every sync, `BeforeHookCreation`) | Creates `/mysql-data` (owner `1001:1001`, Bitnami MySQL) and `/mysql-backups` (owner `999:999`, official mysql image) on EFS. EFS ignores `fsGroup`, so ownership must be set explicitly. |
 | Sync 0 | PVs `mysql-data`/`mysql-backups`, PVC `mysql-backups`, ConfigMap and Service `laravel` | Static storage and non-secret config. |
 | Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
-| Sync 2 | `Job/laravel-mysql-restore` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
-| Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation,HookSucceeded`) | `php artisan migrate --force` against the Ready MySQL. |
+| Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
+| Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
 | Sync 4 | `Deployment/laravel` | Rolls out only after migrations succeeded. |
 
 The `laravel` Service and Deployment select on
@@ -379,18 +383,27 @@ Job runs at sync wave 2 (after MySQL is Ready, before the migration Job), uses
 `mysql-root-password`, mounts the backup PVC read-only, drops and re-creates
 `app_database` from the named dump, and fails visibly if the file is missing or
 the import or validation query fails. Grants on `app_database.*` survive the
-`DROP`/`CREATE`, so `app_user` keeps its access.
+`DROP`/`CREATE`, so `app_user` keeps its access. The Job name ends with a hash
+of `restore.dumpFile` and carries no `BeforeHookCreation` policy, so re-syncing
+the same commit does not drop the database a second time; only a commit naming
+a different dump creates a new Job.
 
-1. Pause self-healing so the temporary scale-down is not reverted. In the
-   infrastructure repository, remove `spec.syncPolicy.automated` from
-   `argocd/apps/app-app.yaml` in a reviewed commit, push it, and confirm the
-   Application no longer reports an automated sync policy:
+1. Pause self-healing so the temporary scale-down below is not reverted before
+   the restore sync. In the infrastructure repository, remove
+   `spec.syncPolicy.automated` from `argocd/apps/app-app.yaml` in a reviewed
+   commit and push it. That directory is applied imperatively by the bootstrap
+   playbook, not by Argo CD, so the commit alone changes nothing: apply it from
+   the infrastructure repository clone, then confirm the Application reports no
+   automated policy (empty output or a `syncOptions`-only object):
 
    ```bash
-   kubectl -n argocd get application app -o jsonpath='{.spec.syncPolicy}{"\n"}'
+   kubectl apply -f argocd/apps/app-app.yaml
+   kubectl -n argocd get application app -o jsonpath='{.spec.syncPolicy.automated}{"\n"}'
    ```
 
-2. Stop writers. MySQL stays running (a logical import needs it):
+2. Stop writers. MySQL stays running (a logical import needs it). The sync in
+   step 3 applies the Deployment again at wave 4, after the restore and the
+   migration succeeded, which is what brings the two replicas back:
 
    ```bash
    kubectl -n app scale deployment/laravel --replicas=0
@@ -406,7 +419,8 @@ the import or validation query fails. Grants on `app_database.*` survive the
    RESTORE_TEST_JOB="laravel-mysql-restore-test-$(date +%s)"
    kubectl -n app create job --from=cronjob/laravel-mysql-restore-test "$RESTORE_TEST_JOB"
    kubectl -n app wait --for=condition=complete "job/$RESTORE_TEST_JOB" --timeout=10m
-   kubectl -n app logs "job/$RESTORE_TEST_JOB" | grep 'restore test using:'   # prints the newest dump name
+   # Prints "restore test using: /backup/app-<UTC stamp>.sql.gz"; dumpFile is the basename only.
+   kubectl -n app logs "job/$RESTORE_TEST_JOB" | grep 'restore test using:' | sed 's#.*/##'
 
    # Edit charts/laravel/values.yaml by hand (yq -i would strip its comments and blank lines):
    #   restore:
@@ -416,26 +430,31 @@ the import or validation query fails. Grants on `app_database.*` survive the
    git add charts/laravel/values.yaml
    git commit -m "ops: restore app_database from app-<UTC stamp>.sql.gz"
    git push origin main
-   argocd app sync app
-   kubectl -n app wait --for=condition=complete job/laravel-mysql-restore --timeout=30m
-   kubectl -n app logs job/laravel-mysql-restore
+   argocd app sync app --timeout 1800
+   argocd app wait app --operation --timeout 1800
+   kubectl -n app get job -l app.kubernetes.io/component=mysql-restore
+   kubectl -n app logs -l app.kubernetes.io/component=mysql-restore --tail=-1
    ```
 
-   The log must end with the `migrations` count and `restore succeeded`. A
-   failed Job leaves the database in the state the failing statement produced;
-   fix the cause and re-run by committing a corrected `restore.dumpFile`
-   (`BeforeHookCreation` replaces the previous Job).
+   The sync operation must succeed and the Job log must end with the
+   `migrations` count and `restore succeeded`. A failed restore fails the sync
+   operation at wave 2 (the migration Job and the Deployment are not applied)
+   and leaves the database in the state the failing statement produced; fix the
+   cause and re-run by committing a corrected `restore.dumpFile`, which creates
+   a new Job.
 
 4. Disable the restore and resume normal operation. Set `restore.enabled` back
    to `false` and `restore.dumpFile` to `""`, commit, push, and sync (the
-   migration Job runs again and is a no-op). Then restore the
-   `spec.syncPolicy.automated` block in the infrastructure repository, push, and
-   require `Synced`/`Healthy`:
+   migration Job runs again and is a no-op; the completed restore Job is not
+   pruned because it is a hook, so delete it by hand). Then restore the
+   `spec.syncPolicy.automated` block in the infrastructure repository, push,
+   re-apply `argocd/apps/app-app.yaml` the same way as in step 1, and require
+   `Synced`/`Healthy`:
 
    ```bash
-   kubectl -n app scale deployment/laravel --replicas=2
    kubectl -n app rollout status deployment/laravel --timeout=5m
-   kubectl -n app delete job laravel-mysql-restore --ignore-not-found
+   kubectl -n app delete job -l app.kubernetes.io/component=mysql-restore
+   kubectl -n argocd get application app -o jsonpath='{.spec.syncPolicy.automated}{"\n"}'
    kubectl -n argocd get application app
    ```
 

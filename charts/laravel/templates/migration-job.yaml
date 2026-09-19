@@ -10,7 +10,9 @@ metadata:
     # deployment path). Sync wave 3 runs after MySQL (1) is Healthy and after an
     # optional restore Job (2), and before the Deployment (4) is applied.
     argocd.argoproj.io/hook: Sync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    # No HookSucceeded: the completed Job stays visible as rollout evidence until
+    # the next sync replaces it.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     argocd.argoproj.io/sync-wave: "3"
 spec:
   backoffLimit: 2
