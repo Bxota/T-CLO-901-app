@@ -186,7 +186,7 @@ migrations run and migrations complete before the Deployment is applied.
 | Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
 | Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
 | Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
-| Sync 4 | `Deployment/laravel` | Rolls out only after migrations succeeded. |
+| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
 
 The `laravel` Service and Deployment select on
 `app.kubernetes.io/component=web` in addition to name/instance, so hook and
@@ -247,6 +247,8 @@ kubectl -n app get deploy,pods,svc,pvc,job,cronjob
 kubectl -n app rollout status deployment/laravel --timeout=5m
 kubectl -n app get pvc data-mysql-0 mysql-backups
 kubectl -n app get svc laravel -o jsonpath='{.spec.ports[0].port}{"\n"}'
+kubectl -n app get httproute laravel -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{" "}{end}{"\n"}'
+curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n' https://app.15.224.195.86.sslip.io/
 kubectl -n app get endpointslice -l kubernetes.io/service-name=laravel \
   -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.conditions.ready}{"\n"}{end}'
 
@@ -259,7 +261,10 @@ curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n
 The expected evidence is `Synced` and `Healthy`, two Ready Laravel pods, a
 Ready MySQL pod, Bound `data-mysql-0` and `mysql-backups` PVCs, a completed
 migration Job, both backup CronJobs, Service port `80`, exactly the two web
-pods listed as `ready=true` endpoints, and an HTTP `200` through the Service.
+pods listed as `ready=true` endpoints, the HTTPRoute reporting `Accepted=True`
+and `ResolvedRefs=True`, an HTTP `200` on the public URL, and an HTTP `200`
+through the Service. A `404` from the public URL with a healthy Deployment
+means the HTTPRoute is missing or not accepted by the Gateway.
 The port-forward request is the "Service answers" evidence; the port number
 alone only proves the spec. Stop and diagnose an unbound PVC, incomplete
 migration, or non-Healthy Application before any resilience demo.
@@ -272,7 +277,7 @@ Laravel's `web` middleware and captures the session cookie; `/api/counter/add`
 creates a durable counter record. Use the same cookie jar after each restart:
 
 ```bash
-APP_URL="${APP_URL:?set this to the Laravel Service or route URL}"
+APP_URL="${APP_URL:-https://app.15.224.195.86.sslip.io}"
 COOKIE_JAR="$(mktemp)"
 
 curl --fail --show-error --cookie-jar "$COOKIE_JAR" "$APP_URL/" >/dev/null
