@@ -27,13 +27,22 @@ spec:
               args:
                 - |
                   stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+                  sql_tmp="/tmp/.app-${stamp}.sql.tmp"
                   tmp="/backup/.app-${stamp}.sql.gz.tmp"
                   final="/backup/app-${stamp}.sql.gz"
+                  cleanup() {
+                    status=$?
+                    rm -f "$sql_tmp" "$tmp"
+                    exit "$status"
+                  }
+                  trap cleanup EXIT
                   mysqldump --single-transaction --quick --routines --triggers \
-                    --host=mysql --port=3306 --user=app_user app_database \
-                    | gzip -9 > "$tmp"
+                    --host=mysql --port=3306 --user=app_user app_database > "$sql_tmp"
+                  test -s "$sql_tmp"
+                  gzip -9 < "$sql_tmp" > "$tmp"
                   test -s "$tmp"
                   mv "$tmp" "$final"
+                  rm -f "$sql_tmp"
                   find /backup -maxdepth 1 -type f -name 'app-*.sql.gz' -mtime +{{ .Values.backup.retentionDays }} -delete
               volumeMounts:
                 - name: backups
