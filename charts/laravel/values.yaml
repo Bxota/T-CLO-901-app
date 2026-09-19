@@ -3,7 +3,7 @@ replicaCount: 2
 image:
   repository: ghcr.io/bxota/t-clo-901-app
   # CI replaces this only with the full source commit SHA; never use a mutable tag.
-  tag: "e69f768f2d3a52c9c5efe7c6ee22cab09994836b"
+  tag: "15465ab62ef6ecc5909b9d57c64e9f234418437f"
   pullPolicy: IfNotPresent
   pullSecrets:
     - ghcr-pull-secret
