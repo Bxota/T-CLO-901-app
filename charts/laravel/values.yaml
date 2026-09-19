@@ -1,4 +1,5 @@
 replicaCount: 2
+
 image:
   repository: ghcr.io/bxota/t-clo-901-app
   # CI replaces this only with the full source commit SHA; never use a mutable tag.
@@ -6,10 +7,13 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets:
     - ghcr-pull-secret
+
 service:
   type: ClusterIP
   port: 80
+
 fullnameOverride: laravel
+
 env:
   APP_ENV: production
   APP_DEBUG: "false"
@@ -21,11 +25,13 @@ env:
   DB_USERNAME: app_user
   SESSION_DRIVER: database
   SESSION_TABLE: sessions
+
 secret:
   name: mysql-credentials
   passwordKey: mysql-password
   rootPasswordKey: mysql-root-password
   appKeyKey: app-key
+
 probes:
   readiness:
     path: /
@@ -41,6 +47,7 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+
 resources:
   requests:
     cpu: 100m
@@ -48,6 +55,7 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+
 # One-shot `php artisan migrate --force` Job (Argo CD Sync hook, wave 3).
 migration:
   resources:
@@ -57,6 +65,7 @@ migration:
     limits:
       cpu: 500m
       memory: 512Mi
+
 # Vendor images. The app namespace admission policy only admits images under
 # ghcr.io/bxota/, so every vendor image is a CI-maintained mirror of a pinned
 # upstream tag (see .github/workflows/build-publish.yml, job mirror-vendor-images).
@@ -94,6 +103,7 @@ mysql:
       limits:
         cpu: 500m
         memory: 1Gi
+
 efs:
   server: fs-04525e4ba350e77a0.efs.eu-west-3.amazonaws.com
   dataPath: /mysql-data
@@ -105,6 +115,7 @@ efs:
   # so the bootstrap Job chowns each export directory to its consumer.
   dataOwner: "1001:1001"
   backupOwner: "999:999"
+
 bootstrap:
   # Mirror of docker.io/library/busybox:1.37.0.
   image: ghcr.io/bxota/busybox:1.37.0
@@ -115,6 +126,7 @@ bootstrap:
     limits:
       cpu: 100m
       memory: 64Mi
+
 backup:
   schedule: "17 2 * * *"
   restoreTestSchedule: "31 3 * * 0"
@@ -139,6 +151,7 @@ backup:
     limits:
       cpu: "1"
       memory: 1Gi
+
 # Break-glass production restore. Never enabled in the committed default; the
 # runbook's "Production data restore" procedure flips it in a reviewed commit.
 restore:
