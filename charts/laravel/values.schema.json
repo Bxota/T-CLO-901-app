@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "secret", "efs"],
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "const": 2
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".+",
+          "not": { "const": "latest" }
+        }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "required": ["name", "passwordKey"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "passwordKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "efs": {
+      "type": "object",
+      "required": ["server"],
+      "properties": {
+        "server": { "type": "string", "minLength": 1 }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
