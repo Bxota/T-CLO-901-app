@@ -57,6 +57,8 @@ mysql:
   enabled: true
   fullnameOverride: mysql
   architecture: standalone
+  commonAnnotations:
+    argocd.argoproj.io/sync-wave: "1"
   auth:
     existingSecret: mysql-credentials
     database: app_database
