@@ -103,6 +103,125 @@ argocd app wait app --sync --health --operation --timeout 300
 The final `kubectl ... -w` command is a watch; stop it with `Ctrl-C` after the
 Application reaches `Synced`/`Healthy`.
 
+## Rollout and resilience evidence
+
+Run this evidence procedure in a controlled acceptance cluster, not against a
+shared production workload. Argo CD remains the only deployment writer: use
+reviewed Git commits and wait for reconciliation; do not substitute a manual
+imperative deployment or `helm upgrade`. First confirm the Application source still
+has the expected repository, `charts/laravel` path, and `app` namespace:
+
+```bash
+rg -n "name: app|path: charts/laravel|namespace: app|repoURL" \
+  <infrastructure-repository>/argocd/apps/app-app.yaml
+```
+
+After the application workflow has published an immutable SHA and committed it
+to the chart, capture the healthy deployment baseline:
+
+```bash
+kubectl -n argocd get application app
+kubectl -n app get deploy,pods,svc,pvc,job,cronjob
+kubectl -n app rollout status deployment/laravel --timeout=5m
+kubectl -n app get pvc mysql-data mysql-backups
+kubectl -n app get svc laravel -o jsonpath='{.spec.ports[0].port}{"\n"}'
+```
+
+The expected evidence is `Synced` and `Healthy`, two Ready Laravel pods, a
+Ready MySQL pod, Bound `mysql-data` and `mysql-backups` PVCs, a completed
+migration Job, both backup CronJobs, and Service port `80`. Stop and diagnose
+an unbound PVC, incomplete migration, or non-Healthy Application before any
+resilience demo.
+
+### Session and MySQL persistence check
+
+This check deletes pods, so run it only in the controlled evidence cluster.
+Record the PVC identity before the MySQL restart. The `/` request runs through
+Laravel's `web` middleware and captures the session cookie; `/api/counter/add`
+creates a durable counter record. Use the same cookie jar after each restart:
+
+```bash
+APP_URL="${APP_URL:?set this to the Laravel Service or route URL}"
+COOKIE_JAR="$(mktemp)"
+
+curl --fail --show-error --cookie-jar "$COOKIE_JAR" "$APP_URL/" >/dev/null
+grep -q 'laravel_session' "$COOKIE_JAR"
+
+LARAVEL_POD="$(kubectl -n app get pod -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n app delete pod "$LARAVEL_POD"
+kubectl -n app rollout status deployment/laravel --timeout=5m
+curl --fail --show-error --cookie "$COOKIE_JAR" "$APP_URL/" >/dev/null
+
+curl --fail --show-error "$APP_URL/api/counter/add"
+kubectl -n app get pvc mysql-data -o jsonpath='{.metadata.name}{"\n"}'
+MYSQL_POD="$(kubectl -n app get pod -l app.kubernetes.io/name=mysql,app.kubernetes.io/instance=app,app.kubernetes.io/component=primary \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n app delete pod "$MYSQL_POD"
+kubectl -n app rollout status statefulset/mysql --timeout=10m
+curl --fail --show-error "$APP_URL/api/counter/count"
+curl --fail --show-error --cookie "$COOKIE_JAR" "$APP_URL/" >/dev/null
+```
+
+The replacement Laravel pod must become Ready, the cookie-backed request must
+continue to return successfully, and the counter value returned after MySQL is
+Ready must include the value returned by `counter/add`. The current UI does not
+read back a session sentinel. Therefore cookie continuity is middleware/session
+storage evidence, not a conclusive application-value assertion; add a
+reviewed, non-production endpoint that writes and reads a nonce before claiming
+stronger cross-pod session semantics.
+
+### Deliberate broken-readiness demonstration
+
+Use a dedicated, reviewed temporary commit in the controlled evidence cluster.
+Change only `probes.readiness.path` in `charts/laravel/values.yaml` from `/` to
+`/this-path-must-not-exist`; do not change the image tag, replica count, or
+liveness path. Render before merging and record the temporary commit SHA:
+
+```bash
+helm lint charts/laravel --set image.tag=test-sha
+helm template app charts/laravel --namespace app --set image.tag=test-sha \
+  | yq 'select(.kind == "Deployment" and .metadata.name == "laravel") \
+        | {"replicas": .spec.replicas, "strategy": .spec.strategy.rollingUpdate, "readiness": (.spec.template.spec.containers[] | select(.name == "laravel") | .readinessProbe.httpGet.path)}'
+git diff --check
+git add charts/laravel/values.yaml
+git commit -m "test: demonstrate failed Laravel readiness"
+git push origin main
+```
+
+After Argo CD reconciles that commit, capture the failed rollout without
+deleting healthy replicas:
+
+```bash
+kubectl -n app get pods -o wide
+kubectl -n app describe deployment laravel
+kubectl -n app rollout status deployment/laravel --timeout=90s || true
+kubectl -n argocd get application app
+```
+
+With `maxUnavailable: 0` and `maxSurge: 1`, the old two pods remain Ready and
+serving while no more than one new pod is created. The new pod remains NotReady
+and the rollout must not report success. Argo CD must be out of `Healthy`
+(normally `Progressing` before the Deployment progress deadline, then
+`Degraded`); record the observed status rather than accepting a silent
+replacement.
+
+Restore the readiness path through a second Git commit (or a revert of the
+temporary commit), then wait for Argo CD to make the rollout healthy again:
+
+```bash
+git revert --no-edit <broken-readiness-commit>
+git push origin main
+kubectl -n app rollout status deployment/laravel --timeout=5m
+kubectl -n app get deployment/laravel pods
+kubectl -n argocd get application app
+```
+
+The valid new pod must become Ready before old pods terminate, and the final
+Deployment must again have two Ready replicas. Confirm
+`charts/laravel/values.yaml` contains `probes.readiness.path: /` before any
+subsequent chart commit.
+
 ## Backup and restore verification
 
 Trigger an on-demand backup from the existing CronJob and wait for its Job to
@@ -116,6 +235,12 @@ kubectl -n app wait --for=condition=complete "job/$BACKUP_JOB" --timeout=10m
 kubectl -n app logs "job/$BACKUP_JOB"
 ```
 
+Capture the Job's `Complete` condition and logs with the evidence. The backup
+script writes its gzip dump atomically under the `mysql-backups` PVC and checks
+that the completed file is non-empty before it renames it; a completed Job is
+therefore the directory-content evidence. A failed dump must leave the Job
+failed and visible, not masquerade as a successful gzip file.
+
 Prove the latest backup can be restored by triggering the existing restore-test
 CronJob. It starts MySQL with an `emptyDir` and mounts only the backup PVC, so
 this procedure is isolated from the live MySQL data PVC.
@@ -127,6 +252,13 @@ kubectl -n app create job \
 kubectl -n app wait --for=condition=complete "job/$RESTORE_TEST_JOB" --timeout=10m
 kubectl -n app logs "job/$RESTORE_TEST_JOB"
 ```
+
+The restore-test log must show a successful import and `SELECT COUNT(*) FROM
+migrations`. It discovers the newest gzip dump from the backup PVC, imports it
+into an `emptyDir` MySQL instance, and fails the Job if decompression, import,
+or the migrations-table query fails. This is the independent proof that the
+backup directory contains a usable dump without mounting or changing the live
+MySQL data PVC.
 
 ### Production data restore guard
 
