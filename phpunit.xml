@@ -19,6 +19,8 @@
     </coverage>
     <php>
         <server name="APP_ENV" value="testing"/>
+        <!-- Test-only encryption key so the web middleware (cookies/sessions) boots without a .env file; never reuse in a deployment. -->
+        <server name="APP_KEY" value="base64:ZVTX+IGZ4BIg18+O3H1wLF6fx5AYSA+P5+Wfj6LjawU="/>
         <server name="BCRYPT_ROUNDS" value="4"/>
         <server name="CACHE_DRIVER" value="array"/>
         <server name="DB_CONNECTION" value="sqlite"/>
