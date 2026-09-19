@@ -81,11 +81,18 @@ jobs:
           # The GHCR packages were created by this PAT and are not linked to the
           # repository, so GITHUB_TOKEN gets permission_denied: write_package.
           password: ${{ secrets.GHCR_PUSH_TOKEN }}
+      # The cluster nodes are arm64 while the runner is amd64; publish a
+      # multi-arch manifest so the image resolves on either architecture.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.APP_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Update immutable Helm image tag
         run: |
           git config user.name github-actions[bot]
