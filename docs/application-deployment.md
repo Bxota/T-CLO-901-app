@@ -181,8 +181,7 @@ liveness path. Render before merging and record the temporary commit SHA:
 ```bash
 helm lint charts/laravel --set image.tag=test-sha
 helm template app charts/laravel --namespace app --set image.tag=test-sha \
-  | yq 'select(.kind == "Deployment" and .metadata.name == "laravel") \
-        | {"replicas": .spec.replicas, "strategy": .spec.strategy.rollingUpdate, "readiness": (.spec.template.spec.containers[] | select(.name == "laravel") | .readinessProbe.httpGet.path)}'
+  | yq 'select((.kind == "Deployment") and (.metadata.name == "laravel")) | {"replicas": .spec.replicas, "strategy": .spec.strategy.rollingUpdate, "readiness": (.spec.template.spec.containers[] | select(.name == "laravel") | .readinessProbe.httpGet.path)}'
 git diff --check
 git add charts/laravel/values.yaml
 git commit -m "test: demonstrate failed Laravel readiness"
@@ -193,8 +192,18 @@ After Argo CD reconciles that commit, capture the failed rollout without
 deleting healthy replicas:
 
 ```bash
-kubectl -n app get pods -o wide
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
+kubectl -n app get rs -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app \
+  -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[*].ready,OWNER:.metadata.ownerReferences[0].name,CREATED:.metadata.creationTimestamp
 kubectl -n app describe deployment laravel
+
+# After the commands above identify the new NotReady pod, keep this running in terminal 1.
+kubectl -n app port-forward service/laravel 18080:80
+
+# In terminal 2, before restoring readiness, prove the Service still reaches an old Ready pod.
+curl --fail --show-error --retry 5 --retry-connrefused http://127.0.0.1:18080/
+
 kubectl -n app rollout status deployment/laravel --timeout=90s || true
 kubectl -n argocd get application app
 ```
@@ -204,7 +213,9 @@ serving while no more than one new pod is created. The new pod remains NotReady
 and the rollout must not report success. Argo CD must be out of `Healthy`
 (normally `Progressing` before the Deployment progress deadline, then
 `Degraded`); record the observed status rather than accepting a silent
-replacement.
+replacement. Keep the pod/ReplicaSet output and successful Service request in
+the evidence record: together they identify the NotReady new ReplicaSet while
+showing that the Service continued to route to an old Ready replica.
 
 Restore the readiness path through a second Git commit (or a revert of the
 temporary commit), then wait for Argo CD to make the rollout healthy again:
@@ -213,7 +224,8 @@ temporary commit), then wait for Argo CD to make the rollout healthy again:
 git revert --no-edit <broken-readiness-commit>
 git push origin main
 kubectl -n app rollout status deployment/laravel --timeout=5m
-kubectl -n app get deployment/laravel pods
+kubectl -n app get deployment/laravel
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
 kubectl -n argocd get application app
 ```
 
