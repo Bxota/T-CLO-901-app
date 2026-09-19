@@ -68,9 +68,10 @@ auto-syncs a merged commit immediately, before that run's mirror job has
 finished, so run the workflow once by hand (`workflow_dispatch`) before the
 first merge of a new vendor tag; otherwise the MySQL and bootstrap pods sit in
 `ImagePullBackOff` until the mirror lands, then recover on their own. The mirror
-packages must be private GHCR packages of the same owner (a package created
-by CI is public by default: set its visibility to private in the package
-settings), so the read-only `ghcr-pull-secret` token pulls them as well; every pod template, including the
+packages must be private GHCR packages of the same owner (confirm each
+package's visibility is private: packages pushed with a PAT are private by
+default, while ones published with `GITHUB_TOKEN` inherit the repository's
+visibility), so the read-only `ghcr-pull-secret` token pulls them as well; every pod template, including the
 Bitnami StatefulSet (`mysql.image.pullSecrets`), references that pull secret.
 
 Local pre-check of the same rules (no cluster needed): the first command lists
@@ -131,6 +132,17 @@ kubectl create secret generic mysql-credentials --namespace app \
   --dry-run=client -o yaml \
   | kubeseal --cert <infrastructure-repository>/sealed-secrets/pub-cert.pem --format yaml \
   > charts/laravel/templates/mysql-credentials.sealedsecret.yaml
+```
+
+Raw `kubeseal` output carries none of the Argo CD annotations the committed
+manifest needs, so re-apply them before committing — the same applies to
+`ghcr-pull-secret.sealedsecret.yaml`:
+
+```bash
+yq -i '.metadata.annotations["argocd.argoproj.io/sync-wave"] = "0" |
+       .metadata.annotations["argocd.argoproj.io/sync-options"] = "SkipDryRunOnMissingResource=true" |
+       .spec.template.metadata.annotations["sealedsecrets.bitnami.com/managed"] = "true"' \
+  charts/laravel/templates/mysql-credentials.sealedsecret.yaml
 ```
 
 Rotating `mysql-root-password` or `mysql-password` on an initialised MySQL
