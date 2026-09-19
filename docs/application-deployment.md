@@ -7,20 +7,64 @@ production `kubectl apply`.
 ## Image delivery contract
 
 The `Build and publish application` workflow runs on pushes to `main` and on
-manual dispatch. It installs dependencies and runs `php artisan test` before
-it logs in to GHCR or pushes an image. A successful build publishes exactly
+manual dispatch. Its `mirror-vendor-images` job runs first (see the next
+section). The `test-build-publish` job then installs dependencies, runs
+`php artisan test`, lints and renders `charts/laravel`, and only then logs in
+to GHCR and pushes an image. A successful build publishes exactly
 `ghcr.io/bxota/t-clo-901-app:${{ github.sha }}` and commits that full SHA into
-`charts/laravel/values.yaml`. The chart must use this immutable SHA tag; do not
-replace it with `latest` or another mutable tag.
+`charts/laravel/values.yaml` (only the 40-hex application tag line is
+rewritten; the MySQL dependency tag is never touched). The chart must use this
+immutable SHA tag; do not replace it with `latest` or another mutable tag. The
+chart schema rejects `latest` and any application image outside
+`ghcr.io/bxota/`.
 
-The GHCR package remains private as specified in the deployment design's
-section 7.
-The workflow uses `GITHUB_TOKEN` with `packages: write` to publish. If
-organization policy requires a separate publisher credential, configure the
-repository `GHCR_PUSH_TOKEN` with only the required package-write scope and
-use it for the publishing login under that policy. It is a CI-only credential:
-never place it in the cluster. The cluster uses the separate read-only pull
-credential described below.
+## Admission policy and image mirror contract
+
+The infrastructure repository's `ValidatingAdmissionPolicy`
+`app-namespace-guardrails` denies any pod in namespace `app` that lacks the
+`app.kubernetes.io/name` label, lacks requests/limits on any container, or
+runs an image outside `ghcr.io/bxota/`. Every pod this chart creates therefore
+carries the labels, declares resources, and runs a `ghcr.io/bxota/` image,
+including the EFS bootstrap, migration, backup, restore-test and restore pods.
+Vendor images are CI-maintained mirrors of pinned upstream tags. The
+`mirror-vendor-images` job copies each manifest with
+`docker buildx imagetools create` on every run (idempotent) before the chart
+tag is updated:
+
+| Upstream (pinned) | Mirror consumed by the chart | Chart value |
+| --- | --- | --- |
+| `docker.io/bitnamilegacy/mysql:8.0.37-debian-12-r2` | `ghcr.io/bxota/bitnami-mysql:8.0.37-debian-12-r2` | `mysql.image` |
+| `docker.io/library/mysql:8.0.37` | `ghcr.io/bxota/mysql:8.0.37` | `backup.image` |
+| `docker.io/library/busybox:1.37.0` | `ghcr.io/bxota/busybox:1.37.0` | `bootstrap.image` |
+
+Bitnami stopped publishing versioned tags under `docker.io/bitnami/`; the
+chart-`10.3.0` default image `docker.io/bitnami/mysql:8.0.37-debian-12-r2`
+returns `404` and only the `bitnamilegacy` copy exists, which is why the mirror
+source is `bitnamilegacy`. The chart schema enforces the mirror contract:
+`mysql.image.registry` must be `ghcr.io` and every vendor image value must start
+with `ghcr.io/bxota/`. When a vendor tag changes, update the workflow matrix
+and `values.yaml` in the same commit, and keep this table aligned. The mirror
+packages are private GHCR packages of the same owner, so the read-only
+`ghcr-pull-secret` token pulls them as well; every pod template, including the
+Bitnami StatefulSet (`mysql.image.pullSecrets`), references that pull secret.
+
+Local pre-check of the same rules (no cluster needed): the first command lists
+each pod template's name label and images, the second must print nothing.
+
+```bash
+helm template app charts/laravel --namespace app --set image.tag=test-sha > /tmp/laravel-rendered.yaml
+yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
+  | (.spec.template // .spec.jobTemplate.spec.template) as $t
+  | .kind + "/" + .metadata.name + " name=" + ($t.metadata.labels["app.kubernetes.io/name"] // "MISSING")
+    + " images=" + ([$t.spec.containers[].image] | join(","))' /tmp/laravel-rendered.yaml
+yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob")
+  | (.spec.template // .spec.jobTemplate.spec.template) as $t
+  | $t.spec.containers[] | select(.resources.requests == null or .resources.limits == null)
+  | "NO-RESOURCES " + .name' /tmp/laravel-rendered.yaml
+```
+
+Every line of the first output must show a real name label and only
+`ghcr.io/bxota/` images.
 
 ## Sealed Secret contract
 
@@ -49,9 +93,10 @@ kubeseal --format yaml --cert sealed-secrets-public-cert.pem < mysql-credentials
 The plaintext input file must remain outside the repository and be deleted
 securely after sealing. Apply the same process to the Docker config JSON for
 `ghcr-pull-secret`. Its token has read-only package-pull access only; it must
-not be a GHCR push token. The deployment and migration Job reference
-`mysql-credentials`, and their `imagePullSecrets` reference
-`ghcr-pull-secret`.
+not be a GHCR push token, and it must be able to read the mirrored vendor
+packages listed above (same GHCR owner). The Deployment, migration Job and
+backup jobs use `mysql-password`; only the break-glass restore Job uses
+`mysql-root-password`; every pod template references `ghcr-pull-secret`.
 
 ## Build, render, and deploy
 
@@ -67,9 +112,36 @@ kubectl -n app rollout status deployment/laravel --timeout=5m
 ```
 
 After Argo CD syncs the immutable image tag, the steady state is two Ready
-Laravel pods, one MySQL pod, both EFS PVCs Bound, the migration hook completed,
-and the daily backup and weekly restore-test CronJobs present. Investigate a
-failed migration hook or an unbound PVC before retrying the rollout.
+Laravel pods, one MySQL pod, both EFS PVCs Bound (`data-mysql-0`, created by
+the Bitnami StatefulSet's `data` volume claim template and bound to the static
+PV `mysql-data`; and `mysql-backups`), the migration hook completed, and the
+daily backup and weekly restore-test CronJobs present. Investigate a failed
+migration hook or an unbound PVC before retrying the rollout.
+
+`kubectl apply --dry-run=client` needs a reachable API server for schema
+discovery; without a cluster, the `helm lint`/`helm template` steps plus the
+admission pre-check above are the local validation.
+
+### Argo CD sync order
+
+Argo CD owns the hook lifecycle; the templates carry no `helm.sh/hook`
+annotations. Each wave waits for the previous one to be Healthy (Jobs:
+completed; StatefulSet: Ready), so on a fresh cluster MySQL is Ready before
+migrations run and migrations complete before the Deployment is applied.
+
+| Phase / wave | Resources | Why here |
+| --- | --- | --- |
+| PreSync 0 | `Job/laravel-efs-bootstrap` (re-created on every sync, `BeforeHookCreation`) | Creates `/mysql-data` (owner `1001:1001`, Bitnami MySQL) and `/mysql-backups` (owner `999:999`, official mysql image) on EFS. EFS ignores `fsGroup`, so ownership must be set explicitly. |
+| Sync 0 | PVs `mysql-data`/`mysql-backups`, PVC `mysql-backups`, ConfigMap and Service `laravel` | Static storage and non-secret config. |
+| Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
+| Sync 2 | `Job/laravel-mysql-restore` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
+| Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation,HookSucceeded`) | `php artisan migrate --force` against the Ready MySQL. |
+| Sync 4 | `Deployment/laravel` | Rolls out only after migrations succeeded. |
+
+The `laravel` Service and Deployment select on
+`app.kubernetes.io/component=web` in addition to name/instance, so hook and
+maintenance pods, which share the name/instance labels for the admission
+policy, never receive Service traffic.
 
 ## GitOps promotion and inspection
 
@@ -123,15 +195,24 @@ to the chart, capture the healthy deployment baseline:
 kubectl -n argocd get application app
 kubectl -n app get deploy,pods,svc,pvc,job,cronjob
 kubectl -n app rollout status deployment/laravel --timeout=5m
-kubectl -n app get pvc mysql-data mysql-backups
+kubectl -n app get pvc data-mysql-0 mysql-backups
 kubectl -n app get svc laravel -o jsonpath='{.spec.ports[0].port}{"\n"}'
+kubectl -n app get endpointslice -l kubernetes.io/service-name=laravel \
+  -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.conditions.ready}{"\n"}{end}'
+
+# Terminal 1: keep the forward open. Terminal 2: the request must return HTTP 200.
+kubectl -n app port-forward service/laravel 18080:80
+curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n' \
+  --retry 5 --retry-connrefused http://127.0.0.1:18080/
 ```
 
 The expected evidence is `Synced` and `Healthy`, two Ready Laravel pods, a
-Ready MySQL pod, Bound `mysql-data` and `mysql-backups` PVCs, a completed
-migration Job, both backup CronJobs, and Service port `80`. Stop and diagnose
-an unbound PVC, incomplete migration, or non-Healthy Application before any
-resilience demo.
+Ready MySQL pod, Bound `data-mysql-0` and `mysql-backups` PVCs, a completed
+migration Job, both backup CronJobs, Service port `80`, exactly the two web
+pods listed as `ready=true` endpoints, and an HTTP `200` through the Service.
+The port-forward request is the "Service answers" evidence; the port number
+alone only proves the spec. Stop and diagnose an unbound PVC, incomplete
+migration, or non-Healthy Application before any resilience demo.
 
 ### Session and MySQL persistence check
 
@@ -147,14 +228,14 @@ COOKIE_JAR="$(mktemp)"
 curl --fail --show-error --cookie-jar "$COOKIE_JAR" "$APP_URL/" >/dev/null
 grep -q 'laravel_session' "$COOKIE_JAR"
 
-LARAVEL_POD="$(kubectl -n app get pod -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app \
+LARAVEL_POD="$(kubectl -n app get pod -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app,app.kubernetes.io/component=web \
   -o jsonpath='{.items[0].metadata.name}')"
 kubectl -n app delete pod "$LARAVEL_POD"
 kubectl -n app rollout status deployment/laravel --timeout=5m
 curl --fail --show-error --cookie "$COOKIE_JAR" "$APP_URL/" >/dev/null
 
 curl --fail --show-error "$APP_URL/api/counter/add"
-kubectl -n app get pvc mysql-data -o jsonpath='{.metadata.name}{"\n"}'
+kubectl -n app get pvc data-mysql-0 -o jsonpath='{.metadata.name}{" -> "}{.spec.volumeName}{"\n"}'
 MYSQL_POD="$(kubectl -n app get pod -l app.kubernetes.io/name=mysql,app.kubernetes.io/instance=app,app.kubernetes.io/component=primary \
   -o jsonpath='{.items[0].metadata.name}')"
 kubectl -n app delete pod "$MYSQL_POD"
@@ -192,9 +273,9 @@ After Argo CD reconciles that commit, capture the failed rollout without
 deleting healthy replicas:
 
 ```bash
-kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
-kubectl -n app get rs -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
-kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app \
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app,app.kubernetes.io/component=web -o wide
+kubectl -n app get rs -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app,app.kubernetes.io/component=web -o wide
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app,app.kubernetes.io/component=web \
   -o 'custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[*].ready,OWNER:.metadata.ownerReferences[0].name,CREATED:.metadata.creationTimestamp'
 kubectl -n app describe deployment laravel
 
@@ -233,7 +314,7 @@ git revert --no-edit <broken-readiness-commit>
 git push origin main
 kubectl -n app rollout status deployment/laravel --timeout=5m
 kubectl -n app get deployment/laravel
-kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app -o wide
+kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/instance=app,app.kubernetes.io/component=web -o wide
 kubectl -n argocd get application app
 ```
 
@@ -255,11 +336,17 @@ kubectl -n app wait --for=condition=complete "job/$BACKUP_JOB" --timeout=10m
 kubectl -n app logs "job/$BACKUP_JOB"
 ```
 
-Capture the Job's `Complete` condition and logs with the evidence. The backup
-script writes its gzip dump atomically under the `mysql-backups` PVC and checks
-that the completed file is non-empty before it renames it; a completed Job is
+Capture the Job's `Complete` condition and logs with the evidence (the log
+ends with `backup written: /backup/app-<stamp>.sql.gz`). The backup script
+writes its gzip dump atomically under the `mysql-backups` PVC and checks that
+the completed file is non-empty before it renames it; a completed Job is
 therefore the directory-content evidence. A failed dump must leave the Job
-failed and visible, not masquerade as a successful gzip file.
+failed and visible, not masquerade as a successful gzip file. Backup, restore-
+test and restore pods run as the official mysql image's UID `999` with all
+capabilities dropped; the EFS bootstrap Job gives `/mysql-backups` to that UID.
+Pruning runs only after a successful dump and uses `-mtime +(retentionDays-1)`,
+so with the default `retentionDays: 7` exactly the seven newest daily dumps are
+kept.
 
 Prove the latest backup can be restored by triggering the existing restore-test
 CronJob. It starts MySQL with an `emptyDir` and mounts only the backup PVC, so
@@ -280,38 +367,77 @@ or the migrations-table query fails. This is the independent proof that the
 backup directory contains a usable dump without mounting or changing the live
 MySQL data PVC.
 
-### Production data restore guard
+### Production data restore
 
 The restore-test Job is the first and normal recovery check. Never load a dump
-into a running MySQL pod or overwrite the live EFS data path with an ad-hoc
-command. A production data replacement is a break-glass operation that requires
-an operator-approved maintenance window, a newly verified backup, and a
-reviewed restore Job committed through GitOps. Before that Job can replace live
-data, pause reconciliation with a reviewed Git change: temporarily remove
-`spec.syncPolicy.automated` from the root repository's
-`infra/argocd/apps/app-app.yaml`, commit and push that change, and confirm the
-Application has refreshed. Do not use an ad-hoc live patch for this normal
-maintenance guard because Git reconciliation would undo it. Only then scale
-Laravel to zero, stop the MySQL StatefulSet, and confirm both are stopped:
+into the live MySQL with an ad-hoc `kubectl exec`, and never write to the live
+EFS data path by hand. A production data replacement is a break-glass
+operation that requires an operator-approved maintenance window, a dump that
+the restore-test Job has already verified, and the chart's reviewed
+`restore-job.yaml`, which is rendered only when `restore.enabled` is true. The
+Job runs at sync wave 2 (after MySQL is Ready, before the migration Job), uses
+`mysql-root-password`, mounts the backup PVC read-only, drops and re-creates
+`app_database` from the named dump, and fails visibly if the file is missing or
+the import or validation query fails. Grants on `app_database.*` survive the
+`DROP`/`CREATE`, so `app_user` keeps its access.
 
-```bash
-kubectl -n app scale deployment/laravel --replicas=0
-kubectl -n app scale statefulset/mysql --replicas=0
-kubectl -n app get deployment/laravel statefulset/mysql pods
-```
+1. Pause self-healing so the temporary scale-down is not reverted. In the
+   infrastructure repository, remove `spec.syncPolicy.automated` from
+   `argocd/apps/app-app.yaml` in a reviewed commit, push it, and confirm the
+   Application no longer reports an automated sync policy:
 
-Only the approved restore Job may replace the live data while MySQL is stopped.
-After it completes and its restored data is validated, restore the committed
-replica counts, restore the reviewed `spec.syncPolicy.automated` Git change,
-resume Argo CD reconciliation, and require `Synced`/`Healthy`:
+   ```bash
+   kubectl -n argocd get application app -o jsonpath='{.spec.syncPolicy}{"\n"}'
+   ```
 
-```bash
-kubectl -n app scale statefulset/mysql --replicas=1
-kubectl -n app rollout status statefulset/mysql --timeout=10m
-kubectl -n app scale deployment/laravel --replicas=2
-kubectl -n app rollout status deployment/laravel --timeout=5m
-kubectl -n argocd get application app
-```
+2. Stop writers. MySQL stays running (a logical import needs it):
+
+   ```bash
+   kubectl -n app scale deployment/laravel --replicas=0
+   kubectl -n app get deployment/laravel statefulset/mysql pods
+   ```
+
+3. Select the dump and run the restore through Git. Set both values in
+   `charts/laravel/values.yaml` (the schema requires an `app-<UTC stamp>.sql.gz`
+   name when `restore.enabled` is true), then sync the reviewed revision with
+   Argo CD:
+
+   ```bash
+   RESTORE_TEST_JOB="laravel-mysql-restore-test-$(date +%s)"
+   kubectl -n app create job --from=cronjob/laravel-mysql-restore-test "$RESTORE_TEST_JOB"
+   kubectl -n app wait --for=condition=complete "job/$RESTORE_TEST_JOB" --timeout=10m
+   kubectl -n app logs "job/$RESTORE_TEST_JOB" | grep 'restore test using:'   # prints the newest dump name
+
+   # Edit charts/laravel/values.yaml by hand (yq -i would strip its comments and blank lines):
+   #   restore:
+   #     enabled: true
+   #     dumpFile: "app-<UTC stamp>.sql.gz"
+   helm lint charts/laravel --set image.tag=test-sha
+   git add charts/laravel/values.yaml
+   git commit -m "ops: restore app_database from app-<UTC stamp>.sql.gz"
+   git push origin main
+   argocd app sync app
+   kubectl -n app wait --for=condition=complete job/laravel-mysql-restore --timeout=30m
+   kubectl -n app logs job/laravel-mysql-restore
+   ```
+
+   The log must end with the `migrations` count and `restore succeeded`. A
+   failed Job leaves the database in the state the failing statement produced;
+   fix the cause and re-run by committing a corrected `restore.dumpFile`
+   (`BeforeHookCreation` replaces the previous Job).
+
+4. Disable the restore and resume normal operation. Set `restore.enabled` back
+   to `false` and `restore.dumpFile` to `""`, commit, push, and sync (the
+   migration Job runs again and is a no-op). Then restore the
+   `spec.syncPolicy.automated` block in the infrastructure repository, push, and
+   require `Synced`/`Healthy`:
+
+   ```bash
+   kubectl -n app scale deployment/laravel --replicas=2
+   kubectl -n app rollout status deployment/laravel --timeout=5m
+   kubectl -n app delete job laravel-mysql-restore --ignore-not-found
+   kubectl -n argocd get application app
+   ```
 
 ## Rollback
 
