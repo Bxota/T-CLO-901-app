@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql-backup
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: dump
+              image: {{ .Values.backup.image | quote }}
+              env:
+                - name: MYSQL_PWD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secret.name }}
+                      key: {{ .Values.secret.passwordKey }}
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+                  tmp="/backup/.app-${stamp}.sql.gz.tmp"
+                  final="/backup/app-${stamp}.sql.gz"
+                  mysqldump --single-transaction --quick --routines --triggers \
+                    --host=mysql --port=3306 --user=app_user app_database \
+                    | gzip -9 > "$tmp"
+                  test -s "$tmp"
+                  mv "$tmp" "$final"
+                  find /backup -maxdepth 1 -type f -name 'app-*.sql.gz' -mtime +{{ .Values.backup.retentionDays }} -delete
+              volumeMounts:
+                - name: backups
+                  mountPath: /backup
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: mysql-backups

@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql-restore-test
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.backup.restoreTestSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: restore-test
+              image: mysql:8.0.37
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  latest="$(find /backup -maxdepth 1 -type f -name 'app-*.sql.gz' | sort | tail -n 1)"
+                  test -n "$latest"
+
+                  mysql_pid=""
+                  cleanup() {
+                    status=$?
+                    if [ -n "$mysql_pid" ] && kill -0 "$mysql_pid" 2>/dev/null; then
+                      mysqladmin --socket=/tmp/mysql.sock shutdown >/dev/null 2>&1 || kill "$mysql_pid" || true
+                      wait "$mysql_pid" || true
+                    fi
+                    exit "$status"
+                  }
+                  trap cleanup EXIT
+
+                  chown -R mysql:mysql /var/lib/mysql
+                  mysqld --initialize-insecure --user=mysql --datadir=/var/lib/mysql
+                  mysqld --user=mysql --datadir=/var/lib/mysql --socket=/tmp/mysql.sock --pid-file=/tmp/mysqld.pid --skip-networking &
+                  mysql_pid=$!
+
+                  attempt=0
+                  until mysqladmin --socket=/tmp/mysql.sock ping --silent; do
+                    attempt=$((attempt + 1))
+                    test "$attempt" -lt 60
+                    sleep 1
+                  done
+
+                  mysql --socket=/tmp/mysql.sock --user=root -e 'CREATE DATABASE app_database;'
+                  gzip -cd "$latest" > /tmp/restore.sql
+                  mysql --socket=/tmp/mysql.sock --user=root app_database < /tmp/restore.sql
+                  mysql --socket=/tmp/mysql.sock --user=root app_database -e 'SELECT COUNT(*) FROM migrations;'
+                  mysqladmin --socket=/tmp/mysql.sock shutdown
+                  wait "$mysql_pid"
+                  mysql_pid=""
+              volumeMounts:
+                - name: backups
+                  mountPath: /backup
+                - name: mysql-data
+                  mountPath: /var/lib/mysql
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: mysql-backups
+            - name: mysql-data
+              emptyDir: {}
