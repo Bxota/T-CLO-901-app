@@ -18,6 +18,15 @@ immutable SHA tag; do not replace it with `latest` or another mutable tag. The
 chart schema rejects `latest` and any application image outside
 `ghcr.io/bxota/`.
 
+The cluster nodes are `arm64` (Graviton) while GitHub runners are `amd64`,
+so the image is published as a multi-arch manifest (`linux/amd64,linux/arm64`,
+built through QEMU). An amd64-only image fails on the nodes with
+`no match for platform in manifest`. Check with:
+
+```bash
+kubectl get nodes -o custom-columns='NODE:.metadata.name,ARCH:.status.nodeInfo.architecture'
+```
+
 Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
 access token limited to `write:packages`/`read:packages`. The GHCR packages
 were created by that token and are not linked to the repository, so the
@@ -59,8 +68,9 @@ auto-syncs a merged commit immediately, before that run's mirror job has
 finished, so run the workflow once by hand (`workflow_dispatch`) before the
 first merge of a new vendor tag; otherwise the MySQL and bootstrap pods sit in
 `ImagePullBackOff` until the mirror lands, then recover on their own. The mirror
-packages are private GHCR packages of the same owner, so the read-only
-`ghcr-pull-secret` token pulls them as well; every pod template, including the
+packages must be private GHCR packages of the same owner (a package created
+by CI is public by default: set its visibility to private in the package
+settings), so the read-only `ghcr-pull-secret` token pulls them as well; every pod template, including the
 Bitnami StatefulSet (`mysql.image.pullSecrets`), references that pull secret.
 
 Local pre-check of the same rules (no cluster needed): the first command lists
@@ -104,6 +114,31 @@ use this command shape:
 ```bash
 kubeseal --format yaml --cert sealed-secrets-public-cert.pem < mysql-credentials.secret.yaml > charts/laravel/templates/mysql-credentials.sealedsecret.yaml
 ```
+
+Until the Sealed Secrets controller (section 7) is installed, both Secrets are
+created once by hand on `kube-1`, with values generated on the spot and never
+written to a file or to Git. The Bitnami chart and Laravel read them by name,
+so the deployment stays blocked in `CreateContainerConfigError`
+(`secret "mysql-credentials" not found`) until they exist:
+
+```bash
+sudo k3s kubectl -n app create secret generic mysql-credentials \
+  --from-literal=mysql-root-password="$(openssl rand -base64 24)" \
+  --from-literal=mysql-password="$(openssl rand -base64 24)" \
+  --from-literal=app-key="base64:$(openssl rand -base64 32)"
+
+read -rs GHCR_READ_TOKEN   # a PAT with read:packages only
+sudo k3s kubectl -n app create secret docker-registry ghcr-pull-secret \
+  --docker-server=ghcr.io --docker-username=Bxota --docker-password="$GHCR_READ_TOKEN" \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+unset GHCR_READ_TOKEN
+```
+
+The `--dry-run=client -o yaml | apply` form also replaces a wrong token in an
+existing `ghcr-pull-secret`. A pod created before the fix keeps failing to
+pull until it is deleted (`kubectl -n app delete pod <name>`; the Job or
+ReplicaSet recreates it). Pull failures show as `403 Forbidden` on
+`ghcr.io/token` when the token lacks access to a private package.
 
 The plaintext input file must remain outside the repository and be deleted
 securely after sealing. Apply the same process to the Docker config JSON for
