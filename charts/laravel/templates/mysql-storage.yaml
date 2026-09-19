@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "laravel.fullname" . }}-efs-bootstrap
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mkdir
+          image: busybox:1.37.0
+          command: ["sh", "-c", "mkdir -p /export/mysql-data /export/mysql-backups && chmod 0770 /export/mysql-data /export/mysql-backups"]
+          volumeMounts:
+            - name: efs-root
+              mountPath: /export
+      volumes:
+        - name: efs-root
+          nfs:
+            server: {{ .Values.efs.server }}
+            path: /
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-data
+  labels:
+    app.kubernetes.io/component: mysql-data
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+{{ toYaml .Values.efs.mountOptions | indent 4 }}
+  nfs:
+    server: {{ .Values.efs.server }}
+    path: {{ .Values.efs.dataPath }}
