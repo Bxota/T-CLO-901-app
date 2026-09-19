@@ -1,0 +1,41 @@
+name: Build and publish application
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test-build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - run: php artisan test
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/bxota/t-clo-901-app:${{ github.sha }}
+      - name: Update immutable Helm image tag
+        run: |
+          sed -i 's/tag: ".*"/tag: "${GITHUB_SHA}"/' charts/laravel/values.yaml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add charts/laravel/values.yaml
+          git commit -m "chore: update image to ${GITHUB_SHA}" || exit 0
+          git push
