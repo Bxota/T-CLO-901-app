@@ -1,2 +1,8 @@
 .env
 .DS_STORE
+/vendor
+/node_modules
+/storage/*.key
+/public/hot
+/public/storage
+.phpunit.result.cache

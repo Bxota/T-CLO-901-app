@@ -1,0 +1,93 @@
+# Weekly proof that the newest dump restores into a throwaway MySQL instance.
+# It mounts only the backup PVC and an emptyDir; it never touches the live
+# MySQL Service or data PVC.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql-restore-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-restore-test") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.restoreTestSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-restore-test") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            {{- range .Values.image.pullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+          securityContext:
+            {{- include "laravel.mysqlToolsPodSecurityContext" . | nindent 12 }}
+          containers:
+            - name: restore-test
+              image: {{ .Values.backup.image | quote }}
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  latest="$(find /backup -maxdepth 1 -type f -name 'app-*.sql.gz' | sort | tail -n 1)"
+                  test -n "$latest"
+                  echo "restore test using: $latest"
+
+                  mysql_pid=""
+                  cleanup() {
+                    status=$?
+                    if [ -n "$mysql_pid" ] && kill -0 "$mysql_pid" 2>/dev/null; then
+                      mysqladmin --socket=/tmp/mysql.sock --user=root shutdown >/dev/null 2>&1 || kill "$mysql_pid" || true
+                      wait "$mysql_pid" || true
+                    fi
+                    exit "$status"
+                  }
+                  trap cleanup EXIT
+
+                  # The pod already runs as the mysql UID (no root, no chown, no --user).
+                  mysqld --initialize-insecure --datadir=/var/lib/mysql
+                  mysqld --datadir=/var/lib/mysql --socket=/tmp/mysql.sock --pid-file=/tmp/mysqld.pid \
+                    --skip-networking --mysqlx=OFF &
+                  mysql_pid=$!
+
+                  attempt=0
+                  until mysqladmin --socket=/tmp/mysql.sock --user=root ping --silent; do
+                    attempt=$((attempt + 1))
+                    test "$attempt" -lt 60
+                    sleep 1
+                  done
+
+                  mysql --socket=/tmp/mysql.sock --user=root -e 'CREATE DATABASE {{ .Values.env.DB_DATABASE }};'
+                  gzip -cd "$latest" > /tmp/restore.sql
+                  mysql --socket=/tmp/mysql.sock --user=root {{ .Values.env.DB_DATABASE }} < /tmp/restore.sql
+                  mysql --socket=/tmp/mysql.sock --user=root {{ .Values.env.DB_DATABASE }} -e 'SELECT COUNT(*) AS migrations FROM migrations;'
+                  mysqladmin --socket=/tmp/mysql.sock --user=root shutdown
+                  wait "$mysql_pid"
+                  mysql_pid=""
+                  echo "restore test succeeded"
+              securityContext:
+                {{- include "laravel.restrictedContainerSecurityContext" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.backup.restoreTestResources | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backup
+                  readOnly: true
+                - name: mysql-data
+                  mountPath: /var/lib/mysql
+                - name: scratch
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: mysql-backups
+            - name: mysql-data
+              emptyDir: {}
+            - name: scratch
+              emptyDir: {}

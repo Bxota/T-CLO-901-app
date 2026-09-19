@@ -1,0 +1,11 @@
+apiVersion: v2
+name: laravel
+description: Laravel application and its MySQL dependency
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: mysql
+    version: 10.3.0
+    repository: https://charts.bitnami.com/bitnami
+    condition: mysql.enabled

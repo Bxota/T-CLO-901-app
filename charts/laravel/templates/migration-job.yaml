@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "laravel.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.maintenanceLabels" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    # Argo CD owns the hook lifecycle (no helm.sh/hook: Argo CD is the only
+    # deployment path). Sync wave 3 runs after MySQL (1) is Healthy and after an
+    # optional restore Job (2), and before the Deployment (4) is applied.
+    argocd.argoproj.io/hook: Sync
+    # No HookSucceeded: the completed Job stays visible as rollout evidence until
+    # the next sync replaces it.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "laravel.maintenanceLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        {{- range .Values.image.pullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["php", "artisan", "migrate", "--force"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "laravel.fullname" . }}
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: {{ .Values.secret.passwordKey }}
+            - name: APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: {{ .Values.secret.appKeyKey }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
