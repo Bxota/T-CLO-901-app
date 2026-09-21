@@ -256,6 +256,9 @@ Application reaches `Synced`/`Healthy`.
   scrape time), `app_http_requests_total{route,method,status}`,
   `app_http_request_duration_seconds{route}`, `app_db_query_duration_seconds`.
   The `/metrics` request itself is not counted.
+- `app_db_query_duration_seconds` excludes the scrape's own query but includes
+  the readiness/liveness probes on `/` (one `Counter::sum` per probe), so its
+  p95 reflects that steady background load as well as user traffic.
 - Public exposure: the chart's `HTTPRoute` answers `403` on `/metrics`
   through an Envoy Gateway `HTTPRouteFilter` (`directResponse`). Verify:
 

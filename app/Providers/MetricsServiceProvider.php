@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Metrics\ApcuUnavailableException;
 use App\Metrics\AppMetrics;
+use Illuminate\Http\Request;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
@@ -41,6 +42,11 @@ class MetricsServiceProvider extends ServiceProvider
         // Query timing is recorded lazily: the registry is only resolved when a
         // query runs, so a missing APCu never breaks application boot.
         DB::listen(function (QueryExecuted $query) {
+            $request = $this->app->bound('request') ? $this->app->make('request') : null;
+            if ($request instanceof Request && $request->is('metrics')) {
+                return; // the scrape's own Counter::sum must not feed the histogram
+            }
+
             try {
                 $this->app->make(AppMetrics::class)->dbQueryDuration()->observe($query->time / 1000);
             } catch (ApcuUnavailableException $e) {

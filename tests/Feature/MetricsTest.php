@@ -73,4 +73,28 @@ class MetricsTest extends TestCase
 
         $this->assertStringNotContainsString('route="metrics"', $out);
     }
+
+    /** @test */
+    public function unknown_http_methods_are_folded_into_other()
+    {
+        $this->call('POST', '/api/counter/count', [], [], [], ['HTTP_X_HTTP_METHOD_OVERRIDE' => 'ZZZQQQ']);
+
+        $out = $this->get('/metrics')->getContent();
+
+        $this->assertStringContainsString('method="OTHER"', $out);
+        $this->assertStringNotContainsString('method="ZZZQQQ"', $out);
+    }
+
+    /** @test */
+    public function the_scrape_itself_does_not_feed_the_sql_histogram()
+    {
+        $this->get('/metrics');
+        $before = $this->get('/metrics')->getContent();
+        preg_match('/app_db_query_duration_seconds_count (\d+)/', $before, $beforeMatch);
+
+        $after = $this->get('/metrics')->getContent();
+        preg_match('/app_db_query_duration_seconds_count (\d+)/', $after, $afterMatch);
+
+        $this->assertSame($beforeMatch[1], $afterMatch[1]);
+    }
 }
