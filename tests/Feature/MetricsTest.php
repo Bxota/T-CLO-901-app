@@ -40,6 +40,8 @@ class MetricsTest extends TestCase
         }
 
         config(['metrics.storage' => 'apcu']);
+        $this->app->forgetInstance(\Prometheus\CollectorRegistry::class);
+        $this->app->forgetInstance(\App\Metrics\AppMetrics::class);
 
         $response = $this->get('/metrics');
 
