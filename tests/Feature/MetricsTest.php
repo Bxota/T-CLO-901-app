@@ -46,4 +46,29 @@ class MetricsTest extends TestCase
         $response->assertStatus(503);
         $this->assertStringContainsString('metrics storage unavailable', $response->getContent());
     }
+
+    /** @test */
+    public function http_requests_are_counted_by_route_method_and_status()
+    {
+        $this->get('/api/counter/add');
+        $this->get('/api/counter/count');
+        $this->get('/api/counter/count');
+        $this->get('/does-not-exist');
+
+        $out = $this->get('/metrics')->getContent();
+
+        $this->assertStringContainsString('app_http_requests_total{route="api/counter/add",method="GET",status="200"} 1', $out);
+        $this->assertStringContainsString('app_http_requests_total{route="api/counter/count",method="GET",status="200"} 2', $out);
+        $this->assertStringContainsString('app_http_requests_total{route="unmatched",method="GET",status="404"} 1', $out);
+        $this->assertStringContainsString('app_http_request_duration_seconds_count{route="api/counter/add"} 1', $out);
+    }
+
+    /** @test */
+    public function metrics_endpoint_does_not_count_itself()
+    {
+        $this->get('/metrics');
+        $out = $this->get('/metrics')->getContent();
+
+        $this->assertStringNotContainsString('route="metrics"', $out);
+    }
 }
