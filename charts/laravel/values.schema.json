@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["image", "secret", "efs", "mysql", "bootstrap", "backup", "restore", "route"],
+  "required": ["image", "secret", "efs", "mysql", "bootstrap", "backup", "restore", "route", "metrics"],
   "properties": {
     "replicaCount": {
       "type": "integer",
@@ -102,6 +102,14 @@
         "properties": {
           "dumpFile": { "type": "string", "pattern": "^app-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z\\.sql\\.gz$" }
         }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["enabled", "interval"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "interval": { "type": "string", "pattern": "^[0-9]+(s|m)$" }
       }
     }
   }

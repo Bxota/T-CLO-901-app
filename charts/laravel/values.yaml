@@ -169,3 +169,10 @@ restore:
   enabled: false
   # Basename of a dump under the mysql-backups PVC, for example app-2026-09-19T02-17-00Z.sql.gz
   dumpFile: ""
+
+# Prometheus scrape target (ServiceMonitor, picked up by kube-prometheus-stack)
+# and the public-gateway rule that answers 403 on /metrics so the endpoint is
+# reachable from inside the cluster only.
+metrics:
+  enabled: true
+  interval: 30s

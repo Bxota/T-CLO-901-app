@@ -247,6 +247,29 @@ argocd app wait app --sync --health --operation --timeout 300
 The final `kubectl ... -w` command is a watch; stop it with `Ctrl-C` after the
 Application reaches `Synced`/`Healthy`.
 
+## Metrics contract
+
+- `GET /metrics` on the Service port serves Prometheus text format from
+  `promphp/prometheus_client_php` with **APCu** storage (per pod; the
+  `ServiceMonitor` scrapes each pod). `METRICS_STORAGE=memory` is test-only.
+- Families: `app_counter_total` (gauge, read from the `counters` table at
+  scrape time), `app_http_requests_total{route,method,status}`,
+  `app_http_request_duration_seconds{route}`, `app_db_query_duration_seconds`.
+  The `/metrics` request itself is not counted.
+- Public exposure: the chart's `HTTPRoute` answers `403` on `/metrics`
+  through an Envoy Gateway `HTTPRouteFilter` (`directResponse`). Verify:
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' https://app.15.224.195.86.sslip.io/metrics   # 403
+  kubectl -n app exec deploy/laravel -- curl -s localhost/metrics | head -5          # text format
+  ```
+
+- Without APCu, `/metrics` returns `503 metrics storage unavailable`; the app
+  keeps serving and the `AppMetricsDown` alert fires. Check `php -m | grep apcu`
+  in the image.
+- `metrics.enabled=false` in the chart removes the `ServiceMonitor`, the 403
+  rule and the filter.
+
 ## Rollout and resilience evidence
 
 Run this evidence procedure in a controlled acceptance cluster, not against a

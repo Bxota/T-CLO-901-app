@@ -1,0 +1,27 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "laravel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+    release: kube-prometheus-stack
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  # Prometheus' job label becomes "laravel" (the value of app.kubernetes.io/name
+  # on the Service), which the AppMetricsDown alert relies on.
+  jobLabel: app.kubernetes.io/name
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "laravel.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.interval }}
+{{- end }}

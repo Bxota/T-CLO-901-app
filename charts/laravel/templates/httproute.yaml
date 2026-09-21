@@ -20,7 +20,40 @@ spec:
   hostnames:
     - {{ .Values.route.host | quote }}
   rules:
+    {{- if .Values.metrics.enabled }}
+    # Longest path match wins: /metrics is answered by the gateway itself
+    # with 403 and never reaches the pods from the internet.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /metrics
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: {{ include "laravel.fullname" . }}-metrics-forbidden
+    {{- end }}
     - backendRefs:
         - name: {{ include "laravel.fullname" . }}
           port: {{ .Values.service.port }}
+{{- if .Values.metrics.enabled }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: {{ include "laravel.fullname" . }}-metrics-forbidden
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  directResponse:
+    statusCode: 403
+    body:
+      type: Inline
+      inline: "forbidden\n"
+{{- end }}
 {{- end }}
