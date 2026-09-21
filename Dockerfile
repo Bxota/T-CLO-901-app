@@ -4,6 +4,12 @@ FROM php:8.2.8-apache
 # Installez les extensions PHP nécessaires
 RUN docker-php-ext-install pdo_mysql
 
+# APCu backs the Prometheus metrics registry: it is shared by every Apache
+# worker of a pod and survives between requests (in-memory storage would not).
+RUN pecl install apcu-5.1.24 \
+    && docker-php-ext-enable apcu \
+    && echo "apc.enable_cli=0" > /usr/local/etc/php/conf.d/zz-apcu.ini
+
 RUN apt-get update && apt-get install -y git unzip p7zip-full
 
 # Installez Composer
