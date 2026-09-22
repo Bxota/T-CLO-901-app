@@ -73,7 +73,6 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          helm dependency build charts/laravel
           helm package charts/laravel --destination "$RUNNER_TEMP" --version "$VERSION" --app-version "$VERSION"
           helm push "$RUNNER_TEMP/laravel-$VERSION.tgz" "$CHART_REPO"
       - name: Tag and publish stable release
