@@ -11,9 +11,11 @@ stable_tag=
 case "${1:-}" in
   '') ;;
   --rc)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
     mode=rc
     ;;
   --stable)
+    [[ $# -eq 2 ]] || { usage; exit 2; }
     mode=stable-tag
     stable_tag=${2:-}
     if [[ ! "$stable_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
@@ -29,6 +31,11 @@ esac
 
 if [[ "$mode" == stable-tag ]]; then
   printf '%s\n' "${stable_tag#v}" | sed 's/-rc\.[0-9]*$//'
+  exit 0
+fi
+
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+  printf '%s\n' 'no release'
   exit 0
 fi
 
@@ -51,17 +58,17 @@ major=0
 minor=0
 patch=0
 feat_subject_re='^feat(\(|:|$)'
-while IFS= read -r message; do
-  [[ -z "$message" ]] && continue
-  subject=${message%%$'\n'*}
-  if [[ "$subject" =~ ^[^:]*!:.+$ || "$message" == *"BREAKING CHANGE"* ]]; then
+while IFS= read -r -d $'\x1e' commit_record; do
+  subject=${commit_record%%$'\x1f'*}
+  body=${commit_record#*$'\x1f'}
+  if [[ "$subject" =~ ^[^:]*!:.+$ || "$body" == *"BREAKING CHANGE"* ]]; then
     major=1
   elif [[ "$subject" =~ $feat_subject_re ]]; then
     minor=1
   else
     patch=1
   fi
-done < <(git log "$range" --format=%B)
+done < <(git log "$range" --format='%s%x1f%b%x1e')
 
 if (( !major && !minor && !patch )); then
   printf '%s\n' 'no release'

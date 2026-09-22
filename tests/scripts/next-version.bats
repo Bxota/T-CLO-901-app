@@ -119,3 +119,26 @@ run_version() {
   [ "$status" -eq 0 ]
   [ "$output" = "1.3.0" ]
 }
+
+@test "commit body text is not classified as a subject" {
+  commit "chore: documentation" "feat: illustrative text"
+
+  run_version --rc
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "0.0.1-rc.1" ]
+}
+
+@test "empty repository returns only no release" {
+  run_version --rc
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "no release" ]
+  [ -z "$stderr" ]
+}
+
+@test "unexpected arguments are rejected" {
+  run_version --rc unexpected
+
+  [ "$status" -eq 2 ]
+}
