@@ -2,8 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/bxota/t-clo-901-app
-  # CI replaces this only with the full source commit SHA; never use a mutable tag.
-  tag: "fe6958467e27e10e35763fb2e83930c552d00505"
+  # When omitted, the immutable Helm Chart.appVersion is used.
   pullPolicy: IfNotPresent
   pullSecrets:
     - ghcr-pull-secret
@@ -42,6 +41,18 @@ secret:
   passwordKey: mysql-password
   rootPasswordKey: mysql-root-password
   appKeyKey: app-key
+
+# Sealed ciphertext is supplied by each Argo CD environment, never by the
+# public chart package.
+sealedSecrets:
+  mysqlCredentials:
+    encryptedData:
+      app-key: ""
+      mysql-password: ""
+      mysql-root-password: ""
+  ghcrPullSecret:
+    encryptedData:
+      .dockerconfigjson: ""
 
 probes:
   readiness:
@@ -116,6 +127,7 @@ mysql:
         memory: 1Gi
 
 efs:
+  enabled: true
   server: fs-04525e4ba350e77a0.efs.eu-west-3.amazonaws.com
   dataPath: /mysql-data
   backupPath: /mysql-backups
@@ -139,6 +151,7 @@ bootstrap:
       memory: 64Mi
 
 backup:
+  enabled: true
   schedule: "17 2 * * *"
   restoreTestSchedule: "31 3 * * 0"
   # Dumps older than this many days are deleted after each successful dump,

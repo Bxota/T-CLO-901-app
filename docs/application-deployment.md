@@ -575,3 +575,22 @@ a different dump creates a new Job.
 To roll back, commit a previously known-good full image SHA to
 `charts/laravel/values.yaml`, run the render checks above, and let Argo CD
 reconcile that commit. Do not retag or overwrite a published GHCR image.
+## Release tags and OCI delivery
+
+The application is deployed from immutable OCI Helm releases, not from the
+app repository's `main` branch. A merge to `main` creates a candidate tag
+`vX.Y.Z-rc.N` and publishes both the image and chart. Stage follows
+`>=1.0.0-0`; production follows `>=1.0.0`.
+
+Run the `promote` workflow with a tested candidate tag to retag its image
+digest and package the stable chart without rebuilding. Images and chart
+versions are never overwritten.
+
+Inspect reconciliation with `argocd app get app-stage --refresh` or
+`argocd app get app --refresh`. If a version is not selected, verify that the
+GHCR chart package is public, the range is valid, and the Argo CD installation
+supports OCI charts.
+
+For rollback, commit an exact chart version such as `1.0.0` to the affected
+child Application, wait for Argo CD to reconcile, and restore the version range
+after a fixed release is published.

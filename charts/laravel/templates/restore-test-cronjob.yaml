@@ -1,3 +1,4 @@
+{{- if .Values.backup.enabled }}
 # Weekly proof that the newest dump restores into a throwaway MySQL instance.
 # It mounts only the backup PVC and an emptyDir; it never touches the live
 # MySQL Service or data PVC.
@@ -94,3 +95,4 @@ spec:
               emptyDir: {}
             - name: scratch
               emptyDir: {}
+{{- end }}

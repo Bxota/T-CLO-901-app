@@ -38,7 +38,7 @@ spec:
                     {{- include "laravel.selectorLabels" . | nindent 20 }}
       containers:
         - name: laravel
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

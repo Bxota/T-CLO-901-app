@@ -1,0 +1,81 @@
+suite: release and environment values
+templates:
+  - templates/deployment.yaml
+  - templates/backup-storage.yaml
+  - templates/backup-cronjob.yaml
+  - templates/restore-test-cronjob.yaml
+  - templates/mysql-storage.yaml
+  - templates/mysql-credentials.sealedsecret.yaml
+  - templates/ghcr-pull-secret.sealedsecret.yaml
+tests:
+  - it: uses Chart.AppVersion when the application image tag is omitted
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/bxota/t-clo-901-app:1.0.0
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/version"]
+          value: 1.0.0
+        template: templates/deployment.yaml
+
+  - it: omits all backup resources when backups are disabled
+    values:
+      - ../../ci/values-prod.yaml
+    set:
+      backup.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/backup-storage.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/backup-cronjob.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/restore-test-cronjob.yaml
+
+  - it: omits the EFS bootstrap job and data volume when EFS is disabled
+    values:
+      - ../../ci/values-prod.yaml
+    set:
+      efs.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/mysql-storage.yaml
+
+  - it: renders both SealedSecrets into the release namespace
+    values:
+      - ../../ci/values-prod.yaml
+    release:
+      namespace: app-stage
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: app-stage
+        template: templates/mysql-credentials.sealedsecret.yaml
+      - equal:
+          path: spec.template.metadata.namespace
+          value: app-stage
+        template: templates/mysql-credentials.sealedsecret.yaml
+      - equal:
+          path: metadata.namespace
+          value: app-stage
+        template: templates/ghcr-pull-secret.sealedsecret.yaml
+      - equal:
+          path: spec.template.metadata.namespace
+          value: app-stage
+        template: templates/ghcr-pull-secret.sealedsecret.yaml
+
+  - it: rejects an empty encrypted MySQL application key
+    values:
+      - ../../ci/values-prod.yaml
+    set:
+      sealedSecrets.mysqlCredentials.encryptedData.app-key: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: sealedSecrets.mysqlCredentials.encryptedData.app-key is required
+        template: templates/mysql-credentials.sealedsecret.yaml

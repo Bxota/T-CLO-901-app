@@ -1,0 +1,156 @@
+name: Publish release candidate
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  APP_IMAGE: ghcr.io/bxota/t-clo-901-app
+  CHART: oci://ghcr.io/bxota/charts/laravel
+
+jobs:
+  # Keep this job aligned with charts/laravel/values.yaml and the image mirror
+  # contract in docs/application-deployment.md.
+  mirror-vendor-images:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        image:
+          - source: docker.io/bitnamilegacy/mysql:8.0.37-debian-12-r2
+            target: ghcr.io/bxota/bitnami-mysql:8.0.37-debian-12-r2
+          - source: docker.io/library/mysql:8.0.37
+            target: ghcr.io/bxota/mysql:8.0.37
+          - source: docker.io/library/busybox:1.37.0
+            target: ghcr.io/bxota/busybox:1.37.0
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
+      - name: Mirror ${{ matrix.image.source }}
+        run: |
+          if docker buildx imagetools inspect "${{ matrix.image.target }}" >/dev/null 2>&1; then
+            echo "mirror already present: ${{ matrix.image.target }}"
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag "${{ matrix.image.target }}" \
+            "${{ matrix.image.source }}"
+          docker buildx imagetools inspect "${{ matrix.image.target }}" >/dev/null
+
+  publish-release-candidate:
+    needs: mirror-vendor-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, pdo_sqlite, sqlite3
+          coverage: none
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+      - name: Run tests
+        run: php artisan test
+      - name: Compute candidate version
+        id: version
+        run: |
+          version=$(scripts/next-version.sh --rc)
+          if [[ "$version" == "no release" ]]; then
+            echo "No release-worthy commits since the latest stable tag"
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "tag=v$version" >>"$GITHUB_OUTPUT"
+          echo "publish=true" >>"$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        if: steps.version.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
+      - name: Set up QEMU
+        if: steps.version.outputs.publish == 'true'
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@v3
+      - name: Detect existing candidate artifacts
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$APP_IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "image_exists=true" >>"$GITHUB_ENV"
+            echo "Reusing existing immutable image: $APP_IMAGE:$VERSION"
+          fi
+          if helm show chart "$CHART" --version "$VERSION" >/dev/null 2>&1; then
+            echo "chart_exists=true" >>"$GITHUB_ENV"
+            echo "Reusing existing immutable chart: $CHART:$VERSION"
+          fi
+      - name: Validate chart fixtures
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          helm lint charts/laravel -f ci/values-stage.yaml --set-string image.tag="$VERSION"
+          helm lint charts/laravel -f ci/values-prod.yaml --set-string image.tag="$VERSION"
+          helm template app-stage charts/laravel --namespace app-stage \
+            -f ci/values-stage.yaml --set-string image.tag="$VERSION" >/dev/null
+          helm template app charts/laravel --namespace app \
+            -f ci/values-prod.yaml --set-string image.tag="$VERSION" >/dev/null
+      - name: Build and push candidate image
+        if: steps.version.outputs.publish == 'true' && env.image_exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.APP_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.APP_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Package and push candidate chart
+        if: steps.version.outputs.publish == 'true' && env.chart_exists != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          helm package charts/laravel \
+            --destination "$RUNNER_TEMP" \
+            --version "$VERSION" \
+            --app-version "$VERSION"
+          helm push "$RUNNER_TEMP/laravel-$VERSION.tgz" oci://ghcr.io/bxota/charts
+      - name: Create candidate tag and prerelease
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git rev-parse "$TAG^{commit}" >/dev/null 2>&1; then
+            test "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA"
+          else
+            git tag --annotate "$TAG" --message "Release candidate $TAG"
+            git push origin "$TAG"
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --prerelease \
+              --generate-notes --title "$TAG"
