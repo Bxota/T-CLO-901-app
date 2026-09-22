@@ -115,9 +115,8 @@ mysql:
       enabled: true
       storageClass: "-"
       size: 20Gi
-      selector:
-        matchLabels:
-          app.kubernetes.io/component: mysql-data
+      # Prod binds the static EFS PV through a selector set in its values;
+      # a selector cannot be removed by an override, so keep the default empty.
     resources:
       requests:
         cpu: 100m

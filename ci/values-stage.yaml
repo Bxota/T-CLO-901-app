@@ -9,7 +9,6 @@ mysql:
   primary:
     persistence:
       storageClass: local-path
-      selector: null
 backup:
   enabled: false
 sealedSecrets:
