@@ -50,16 +50,31 @@ jobs:
         with:
           ref: ${{ steps.version.outputs.rc_tag }}
           fetch-depth: 0
+          # GITHUB_TOKEN cannot push a tag whose commit touches
+          # .github/workflows; RELEASE_TOKEN is a PAT with the workflow scope.
+          token: ${{ secrets.RELEASE_TOKEN }}
       - name: Verify immutable source artifacts
         env:
           RC_VERSION: ${{ steps.version.outputs.rc_version }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker buildx imagetools inspect "$APP_IMAGE:$RC_VERSION" >/dev/null
-          if docker buildx imagetools inspect "$APP_IMAGE:$VERSION" >/dev/null 2>&1; then
+          rc_digest="$(docker buildx imagetools inspect "$APP_IMAGE:$RC_VERSION" --format '{{.Manifest.Digest}}')"
+          if stable_digest="$(docker buildx imagetools inspect "$APP_IMAGE:$VERSION" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            if [ "$stable_digest" != "$rc_digest" ]; then
+              echo "::error::$APP_IMAGE:$VERSION already exists with digest $stable_digest, but $RC_VERSION is $rc_digest; promote the rc that produced it"
+              exit 1
+            fi
             echo "stable_image_exists=true" >>"$GITHUB_ENV"
           fi
-          if helm show chart "$CHART_REPO/laravel:$VERSION" >/dev/null 2>&1; then
+          if helm pull "$CHART_REPO/laravel" --version "$VERSION" --destination "$RUNNER_TEMP/stable" >/dev/null 2>&1; then
+            helm package charts/laravel --destination "$RUNNER_TEMP/candidate" --version "$VERSION" --app-version "$VERSION" >/dev/null
+            mkdir -p "$RUNNER_TEMP/cmp/stable" "$RUNNER_TEMP/cmp/candidate"
+            tar xzf "$RUNNER_TEMP/stable/laravel-$VERSION.tgz" -C "$RUNNER_TEMP/cmp/stable"
+            tar xzf "$RUNNER_TEMP/candidate/laravel-$VERSION.tgz" -C "$RUNNER_TEMP/cmp/candidate"
+            if ! diff -r "$RUNNER_TEMP/cmp/stable" "$RUNNER_TEMP/cmp/candidate"; then
+              echo "::error::chart laravel:$VERSION already exists with different content than $RC_VERSION"
+              exit 1
+            fi
             echo "stable_chart_exists=true" >>"$GITHUB_ENV"
           fi
       - name: Retag tested image digest
