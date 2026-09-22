@@ -1,4 +1,10 @@
 replicaCount: 2
+mysql:
+  primary:
+    persistence:
+      selector:
+        matchLabels:
+          app.kubernetes.io/component: mysql-data
 sealedSecrets:
   mysqlCredentials:
     encryptedData:

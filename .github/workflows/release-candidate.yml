@@ -114,6 +114,9 @@ jobs:
           helm lint charts/laravel -f ci/values-prod.yaml --set-string image.tag="$VERSION"
           helm template app-stage charts/laravel --namespace app-stage \
             -f ci/values-stage.yaml --set-string image.tag="$VERSION" >/dev/null
+          # local-path cannot provision a claim with a selector.
+          helm template app-stage charts/laravel --namespace app-stage -f ci/values-stage.yaml \
+            | grep -q 'app.kubernetes.io/component: mysql-data' && exit 1 || true
           helm template app charts/laravel --namespace app \
             -f ci/values-prod.yaml --set-string image.tag="$VERSION" >/dev/null
           # Argo CD deploys without image.tag: every image must fall back to appVersion.
