@@ -409,9 +409,12 @@ kubectl -n app rollout status deployment/laravel --timeout=90s || true
 kubectl -n argocd get application app
 ```
 
-With `maxUnavailable: 0` and `maxSurge: 1`, the old two pods remain Ready and
-serving while no more than one new pod is created. The new pod remains NotReady
-and the rollout must not report success. Argo CD must be out of `Healthy`
+With `maxUnavailable: 1` and `maxSurge: 0`, one old pod is terminated and
+replaced in place while the other old pod remains Ready and serving; no surge
+pod is created because the required anti-affinity leaves no third worker for
+it. The new pod remains NotReady, so the rollout stalls after that first
+replacement and must not report success: the remaining old pod keeps serving
+alone. Argo CD must be out of `Healthy`
 (normally `Progressing` before the Deployment progress deadline, then
 `Degraded`); record the observed status rather than accepting a silent
 replacement. Keep the pod/ReplicaSet output and successful Service request in
@@ -434,8 +437,9 @@ kubectl -n app get pods -l app.kubernetes.io/name=laravel,app.kubernetes.io/inst
 kubectl -n argocd get application app
 ```
 
-The valid new pod must become Ready before old pods terminate, and the final
-Deployment must again have two Ready replicas. Confirm
+Each valid new pod must become Ready before the next old pod is terminated,
+and the final Deployment must again have two Ready replicas on two different
+nodes (`-o wide` shows distinct `NODE` values). Confirm
 `charts/laravel/values.yaml` contains `probes.readiness.path: /` before any
 subsequent chart commit.
 

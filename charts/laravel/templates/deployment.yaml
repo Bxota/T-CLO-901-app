@@ -10,11 +10,14 @@ metadata:
     argocd.argoproj.io/sync-wave: "4"
 spec:
   replicas: {{ .Values.replicaCount }}
+  # No surge pod: the strict anti-affinity below leaves no node for a third
+  # replica on the two-worker lab cluster, so the rollout replaces one pod at a
+  # time while the other keeps serving. A NotReady new pod never takes traffic.
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       {{- include "laravel.selectorLabels" . | nindent 6 }}
@@ -27,15 +30,15 @@ spec:
         {{- range .Values.image.pullSecrets }}
         - name: {{ . }}
         {{- end }}
+      # Replicas of the web tier must land on different nodes (subject
+      # requirement); replicaCount must therefore not exceed the worker count.
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels:
-                    {{- include "laravel.selectorLabels" . | nindent 20 }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "laravel.selectorLabels" . | nindent 18 }}
       containers:
         - name: laravel
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
