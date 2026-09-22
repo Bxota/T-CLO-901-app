@@ -208,7 +208,20 @@ migrations run and migrations complete before the Deployment is applied.
 | Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
 | Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
 | Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
-| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
+| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel`, `ServiceMonitor/laravel`, `HTTPRouteFilter/laravel-metrics-forbidden` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
+| Sync 5 | `CronJob/laravel-mysql-backup`, `CronJob/laravel-mysql-restore-test` | Last wave on purpose: Argo CD reports a CronJob whose latest run failed as Degraded, and every wave waits for the previous ones to be Healthy. A failed nightly backup must never block an application rollout (it did once, see below); the `BackupMissing` alert is the signal instead. |
+
+If a sync fails with `CronJob has not completed its last execution
+successfully`, Argo CD's health check compares the CronJob's
+`status.lastScheduleTime` with `status.lastSuccessfulTime`; deleting the
+failed Job does not update them. Run a manual backup to prove the path works
+(`kubectl -n app create job --from=cronjob/laravel-mysql-backup laravel-mysql-backup-manual`),
+then either wait for the next scheduled success or realign the status once:
+
+```bash
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n app patch cronjob laravel-mysql-backup --subresource=status --type merge -p "{\"status\":{\"lastSuccessfulTime\":\"$NOW\"}}"
+```
 
 The `laravel` Service and Deployment select on
 `app.kubernetes.io/component=web` in addition to name/instance, so hook and

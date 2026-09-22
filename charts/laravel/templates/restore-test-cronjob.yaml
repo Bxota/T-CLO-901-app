@@ -9,6 +9,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-restore-test") | nindent 4 }}
+  annotations:
+    # Same reasoning as the backup CronJob: never gate the rollout on it.
+    argocd.argoproj.io/sync-wave: "5"
 spec:
   schedule: {{ .Values.backup.restoreTestSchedule | quote }}
   concurrencyPolicy: Forbid

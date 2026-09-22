@@ -6,6 +6,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "laravel.maintenanceLabels" (dict "root" . "component" "mysql-backup") | nindent 4 }}
+  annotations:
+    # Last wave: a CronJob whose latest run failed is Degraded, and Argo CD
+    # waits for every earlier wave to be Healthy before rolling the
+    # Deployment. Backups must never block an application rollout; the
+    # BackupMissing alert is the signal for a missing dump.
+    argocd.argoproj.io/sync-wave: "5"
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
   concurrencyPolicy: Forbid
@@ -49,7 +55,7 @@ spec:
                   }
                   trap cleanup EXIT
                   # Dump to a file first so a mysqldump failure is never hidden behind gzip's exit status.
-                  mysqldump --single-transaction --quick --routines --triggers \
+                  mysqldump --single-transaction --quick --routines --triggers --no-tablespaces \
                     --host={{ .Values.env.DB_HOST }} --port={{ .Values.env.DB_PORT }} --user={{ .Values.env.DB_USERNAME }} {{ .Values.env.DB_DATABASE }} > "$sql_tmp"
                   test -s "$sql_tmp"
                   gzip -9 < "$sql_tmp" > "$tmp"
