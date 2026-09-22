@@ -6,6 +6,9 @@ metadata:
     {{- include "laravel.labels" . | nindent 4 }}
 data:
   APP_ENV: {{ .Values.env.APP_ENV | quote }}
+  APP_DEPLOY_ENV: {{ .Values.env.APP_DEPLOY_ENV | quote }}
+  # The immutable release: Chart.appVersion is set by the release workflows.
+  APP_VERSION: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
   APP_DEBUG: {{ .Values.env.APP_DEBUG | quote }}
   APP_URL: {{ .Values.env.APP_URL | quote }}
   DB_CONNECTION: {{ .Values.env.DB_CONNECTION | quote }}

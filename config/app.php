@@ -30,6 +30,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Deployment Identity
+    |--------------------------------------------------------------------------
+    |
+    | Shown on the welcome page so a browser tells stage from prod and which
+    | immutable release is running. Both come from the Helm ConfigMap:
+    | APP_DEPLOY_ENV from the environment values, APP_VERSION from appVersion.
+    |
+    */
+
+    'deploy_env' => env('APP_DEPLOY_ENV', 'production'),
+
+    'version' => env('APP_VERSION', 'dev'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Debug Mode
     |--------------------------------------------------------------------------
     |

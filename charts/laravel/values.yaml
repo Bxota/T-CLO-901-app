@@ -26,6 +26,9 @@ route:
 
 env:
   APP_ENV: production
+  # Shown on the welcome page; stage sets "staging". Not APP_ENV, which
+  # would change Laravel behaviour.
+  APP_DEPLOY_ENV: production
   APP_DEBUG: "false"
   APP_URL: https://app.15.224.195.86.sslip.io
   DB_CONNECTION: mysql
