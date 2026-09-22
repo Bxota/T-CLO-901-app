@@ -1,3 +1,4 @@
+{{- if .Values.backup.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -74,3 +75,4 @@ spec:
                 claimName: mysql-backups
             - name: scratch
               emptyDir: {}
+{{- end }}

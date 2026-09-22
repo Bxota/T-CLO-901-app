@@ -1,0 +1,11 @@
+replicaCount: 2
+sealedSecrets:
+  mysqlCredentials:
+    encryptedData:
+      app-key: prod-placeholder
+      mysql-password: prod-placeholder
+      mysql-root-password: prod-placeholder
+  ghcrPullSecret:
+    encryptedData:
+      .dockerconfigjson: prod-placeholder
+

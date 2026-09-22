@@ -1,3 +1,4 @@
+{{- if .Values.efs.enabled }}
 # Runs on every sync before anything else (same pattern as the Loki EFS
 # bootstrap in the infra repository). It only creates the two export
 # directories and hands each one to its consumer UID; it never deletes data.
@@ -72,3 +73,4 @@ spec:
   nfs:
     server: {{ .Values.efs.server }}
     path: {{ .Values.efs.dataPath }}
+{{- end }}

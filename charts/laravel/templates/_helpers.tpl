@@ -28,7 +28,7 @@ app.kubernetes.io/component: web
 
 {{- define "laravel.labels" -}}
 {{ include "laravel.selectorLabels" . }}
-app.kubernetes.io/version: {{ .Values.image.tag | quote }}
+app.kubernetes.io/version: {{ (.Values.image.tag | default .Chart.AppVersion) | quote }}
 {{- end }}
 
 {{/*
@@ -39,7 +39,7 @@ Every pod in the app namespace must carry app.kubernetes.io/name (admission poli
 {{- define "laravel.maintenanceLabels" -}}
 {{ include "laravel.commonLabels" .root }}
 app.kubernetes.io/component: {{ .component }}
-app.kubernetes.io/version: {{ .root.Values.image.tag | quote }}
+app.kubernetes.io/version: {{ (.root.Values.image.tag | default .root.Chart.AppVersion) | quote }}
 {{- end }}
 
 {{/*
