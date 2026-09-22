@@ -116,6 +116,9 @@ jobs:
             -f ci/values-stage.yaml --set-string image.tag="$VERSION" >/dev/null
           helm template app charts/laravel --namespace app \
             -f ci/values-prod.yaml --set-string image.tag="$VERSION" >/dev/null
+          # Argo CD deploys without image.tag: every image must fall back to appVersion.
+          helm template app charts/laravel --namespace app -f ci/values-prod.yaml \
+            | grep -E '^\s+image: "?ghcr.io/bxota/t-clo-901-app:"?$' && exit 1 || true
       - name: Build and push candidate image
         if: steps.version.outputs.publish == 'true' && env.image_exists != 'true'
         uses: docker/build-push-action@v6
