@@ -56,14 +56,20 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker buildx imagetools inspect "$APP_IMAGE:$RC_VERSION" >/dev/null
-          if docker buildx imagetools inspect "$APP_IMAGE:$VERSION" >/dev/null 2>&1; then exit 1; fi
-          if helm show chart "$CHART_REPO/laravel:$VERSION" >/dev/null 2>&1; then exit 1; fi
+          if docker buildx imagetools inspect "$APP_IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "stable_image_exists=true" >>"$GITHUB_ENV"
+          fi
+          if helm show chart "$CHART_REPO/laravel:$VERSION" >/dev/null 2>&1; then
+            echo "stable_chart_exists=true" >>"$GITHUB_ENV"
+          fi
       - name: Retag tested image digest
+        if: env.stable_image_exists != 'true'
         env:
           RC_VERSION: ${{ steps.version.outputs.rc_version }}
           VERSION: ${{ steps.version.outputs.version }}
         run: docker buildx imagetools create --tag "$APP_IMAGE:$VERSION" "$APP_IMAGE:$RC_VERSION"
       - name: Package stable chart
+        if: env.stable_chart_exists != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -77,6 +83,11 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag --annotate "v$VERSION" --message "Release v$VERSION"
-          git push origin "v$VERSION"
-          gh release create "v$VERSION" --verify-tag --generate-notes --title "v$VERSION"
+          if git rev-parse "v$VERSION^{commit}" >/dev/null 2>&1; then
+            test "$(git rev-parse "v$VERSION^{commit}")" = "$(git rev-parse HEAD)"
+          else
+            git tag --annotate "v$VERSION" --message "Release v$VERSION"
+            git push origin "v$VERSION"
+          fi
+          gh release view "v$VERSION" >/dev/null 2>&1 || \
+            gh release create "v$VERSION" --verify-tag --generate-notes --title "v$VERSION"

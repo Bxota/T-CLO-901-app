@@ -32,7 +32,7 @@ run_version() {
   run_version --rc
 
   [ "$status" -eq 0 ]
-  [ "$output" = "0.0.1-rc.1" ]
+  [ "$output" = "1.0.1-rc.1" ]
 }
 
 @test "feat bumps minor" {
@@ -41,7 +41,7 @@ run_version() {
   run_version --rc
 
   [ "$status" -eq 0 ]
-  [ "$output" = "0.1.0-rc.1" ]
+  [ "$output" = "1.1.0-rc.1" ]
 }
 
 @test "fix bumps patch from stable base" {
@@ -113,6 +113,18 @@ run_version() {
   [ "$output" = "1.3.0-rc.2" ]
 }
 
+@test "older feat is not ignored when a newer fix exists" {
+  commit "chore: initial"
+  git -C "$repo" tag v1.2.3
+  commit "feat: add dashboard"
+  commit "fix: polish dashboard"
+
+  run_version --rc
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "1.3.0-rc.1" ]
+}
+
 @test "stable mode strips an rc tag" {
   run_version --stable v1.3.0-rc.4
 
@@ -126,7 +138,7 @@ run_version() {
   run_version --rc
 
   [ "$status" -eq 0 ]
-  [ "$output" = "0.0.1-rc.1" ]
+  [ "$output" = "1.0.1-rc.1" ]
 }
 
 @test "empty repository returns only no release" {

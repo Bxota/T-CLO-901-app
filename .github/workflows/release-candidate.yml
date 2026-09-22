@@ -91,18 +91,18 @@ jobs:
       - name: Set up Docker Buildx
         if: steps.version.outputs.publish == 'true'
         uses: docker/setup-buildx-action@v3
-      - name: Reject duplicate artifacts
+      - name: Detect existing candidate artifacts
         if: steps.version.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           if docker buildx imagetools inspect "$APP_IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "Image already exists: $APP_IMAGE:$VERSION" >&2
-            exit 1
+            echo "image_exists=true" >>"$GITHUB_ENV"
+            echo "Reusing existing immutable image: $APP_IMAGE:$VERSION"
           fi
           if helm show chart "$CHART" --version "$VERSION" >/dev/null 2>&1; then
-            echo "Chart already exists: $CHART:$VERSION" >&2
-            exit 1
+            echo "chart_exists=true" >>"$GITHUB_ENV"
+            echo "Reusing existing immutable chart: $CHART:$VERSION"
           fi
       - name: Validate chart fixtures
         if: steps.version.outputs.publish == 'true'
@@ -116,7 +116,7 @@ jobs:
           helm template app charts/laravel --namespace app \
             -f ci/values-prod.yaml --set-string image.tag="$VERSION" >/dev/null
       - name: Build and push candidate image
-        if: steps.version.outputs.publish == 'true'
+        if: steps.version.outputs.publish == 'true' && env.image_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -128,7 +128,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Package and push candidate chart
-        if: steps.version.outputs.publish == 'true'
+        if: steps.version.outputs.publish == 'true' && env.chart_exists != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -145,10 +145,12 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag --annotate "$TAG" --message "Release candidate $TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" \
-            --verify-tag \
-            --prerelease \
-            --generate-notes \
-            --title "$TAG"
+          if git rev-parse "$TAG^{commit}" >/dev/null 2>&1; then
+            test "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA"
+          else
+            git tag --annotate "$TAG" --message "Release candidate $TAG"
+            git push origin "$TAG"
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --prerelease \
+              --generate-notes --title "$TAG"

@@ -47,7 +47,10 @@ stable_tags=$(git tag --list | while IFS= read -r tag; do
 done | sort -V)
 base_tag=$(printf '%s\n' "$stable_tags" | tail -n 1)
 
-base_version=0.0.0
+# The first release must satisfy the infrastructure's supported-version floor.
+# Treat an untagged repository as a 1.0.0 baseline, so the first patch/feature
+# release is always in the 1.x series.
+base_version=1.0.0
 range=HEAD
 if [[ -n "$base_tag" ]]; then
   base_version=${base_tag#v}
@@ -58,17 +61,20 @@ major=0
 minor=0
 patch=0
 feat_subject_re='^feat(\(|:|$)'
-while IFS= read -r -d $'\x1e' commit_record; do
-  subject=${commit_record%%$'\x1f'*}
-  body=${commit_record#*$'\x1f'}
-  if [[ "$subject" =~ ^[^:]*!:.+$ || "$body" == *"BREAKING CHANGE"* ]]; then
+while IFS= read -r subject; do
+  [[ -n "$subject" ]] || continue
+  if [[ "$subject" =~ ^[^:]*!:.+$ ]]; then
     major=1
   elif [[ "$subject" =~ $feat_subject_re ]]; then
     minor=1
   else
     patch=1
   fi
-done < <(git log "$range" --format='%s%x1f%b%x1e')
+done < <(git log "$range" --format='%s')
+
+if git log "$range" --format='%b' | grep -q 'BREAKING CHANGE'; then
+  major=1
+fi
 
 if (( !major && !minor && !patch )); then
   printf '%s\n' 'no release'
