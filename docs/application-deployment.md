@@ -65,11 +65,19 @@ Baseline recorded on 2026-09-23 (local run, same Trivy checks):
   upgrade` changes nothing). This is why the base is not pinned to a patch
   release; reproducibility is provided by the immutable `ghcr.io` tag of each
   release, not by the base tag.
-- **Composer.** 13 findings with a fix, all in `composer.lock`: `laravel/framework`
-  8.83.27 (fixed in 8.83.28), `symfony/process` 5.4.26 (CRITICAL, fixed in
-  5.4.46), `symfony/http-foundation`, `symfony/mime`, `guzzlehttp/guzzle`,
-  `league/commonmark` 1.6.7 (fixes only in 2.x). A `composer update` within the
-  current constraints followed by `php artisan test` is the follow-up.
+- **Composer.** 13 findings with a fix at first, all in `composer.lock`. A
+  `composer update` within the existing constraints (2026-09-23) moved
+  `symfony/process` 5.4.26 → 5.4.51 (the CRITICAL), `symfony/http-foundation`
+  → 5.4.50, `symfony/mime` → 5.4.52, `guzzlehttp/guzzle` 7.7.0 → 7.15.5,
+  `league/commonmark` 1.6.7 → 2.10.3 and `laravel/framework` 8.83.27 → 8.83.29
+  (last Laravel 8 release); 18/18 tests pass. One finding remains:
+  `laravel/framework` GHSA-5vg9-5847-vvmq, fixed only in Laravel 12.60+.
+  Laravel 8 is end of life, so every stable 8.x carries advisories and
+  Composer 2.9 refuses them by default (it then silently falls back to the
+  `8.x-dev` branch). `composer.json` therefore lists the three remaining
+  Laravel advisory IDs under `config.policy.advisories.ignore-id`, each with
+  its reason (no email validation, no file upload in this app). Removing them
+  requires a framework major upgrade, out of scope before the defence.
 - **Chart.** 10 HIGH misconfigurations, two families: `readOnlyRootFilesystem`
   not set on any container (Laravel writes to `storage/` and Apache to
   `/var/run`, so this needs `emptyDir` mounts first), and no
@@ -78,8 +86,8 @@ Baseline recorded on 2026-09-23 (local run, same Trivy checks):
   The backup and restore pods already run as UID 999 with all capabilities
   dropped.
 
-To tighten the policy once the Composer baseline is clean, set `exit-code: '1'`
-on the `image-vulnerabilities` step; the chart scan stays advisory until the
+To tighten the policy, set `exit-code: '1'` on the `image-vulnerabilities`
+step once the Laravel 8 finding is accepted there too (Trivy `.trivyignore`); the chart scan stays advisory until the
 two families above are addressed.
 
 Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
