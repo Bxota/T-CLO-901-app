@@ -452,6 +452,41 @@ nodes (`-o wide` shows distinct `NODE` values). Confirm
 `charts/laravel/values.yaml` contains `probes.readiness.path: /` before any
 subsequent chart commit.
 
+## Network policies
+
+`templates/networkpolicy.yaml` installs a default-deny (ingress and egress) for
+the whole release namespace and re-opens only four flows, enforced by the
+kube-router controller embedded in k3s:
+
+| Policy | Allows |
+| --- | --- |
+| `laravel-allow-dns` | every pod → CoreDNS (`kube-system`, 53/UDP+TCP) |
+| `laravel-web` | Envoy Gateway pods (`route.gateway.namespace`) and Prometheus (`networkPolicy.namespaces.monitoring`) → web pods :80 |
+| `laravel-mysql` | this release's pods (`app.kubernetes.io/name=laravel`, same instance) → MySQL :3306 |
+| `laravel-mysql-clients` | web, migrate, mysql-backup and mysql-restore pods → MySQL :3306 (egress side) |
+
+The Bitnami subchart's own policy is disabled (`mysql.networkPolicy.enabled:
+false`): it allowed ingress to 3306 from anywhere, which would have defeated
+`laravel-mysql` since policies are additive. Kubelet probes and the NFS mounts
+are node-originated and unaffected; the EFS bootstrap Job and the weekly
+restore test (local mysqld) need no network at all.
+
+Proof, from `kube-1`:
+
+```bash
+kubectl -n app get networkpolicy
+# MySQL reachable from a web pod of the release (expected: "open")
+kubectl -n app exec deploy/laravel -- php -r '$s=@fsockopen("mysql",3306,$e,$m,3); echo $s?"open\n":"closed\n";'
+# MySQL unreachable from another namespace (expected: timeout, exit code non-zero)
+kubectl -n monitoring run np-test --rm -it --restart=Never --image=ghcr.io/bxota/busybox:1.37.0 --command -- nc -zv -w 3 mysql.app.svc.cluster.local 3306
+# Web pods still answer through the Gateway
+curl -fsSI https://app.15.224.195.86.sslip.io/ | head -1
+```
+
+The `monitoring` namespace has no admission policy, so the test pod above needs
+no label or resources. A rule change is a chart change: edit the template,
+render, and let Argo CD apply it; never `kubectl edit` a policy.
+
 ## Backup and restore verification
 
 Trigger an on-demand backup from the existing CronJob and wait for its Job to

@@ -1,0 +1,61 @@
+suite: network policies
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: denies all traffic by default and allows only the documented flows
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - hasDocuments:
+          count: 5
+      - documentSelector:
+          path: metadata.name
+          value: laravel-default-deny
+        equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+      - documentSelector:
+          path: metadata.name
+          value: laravel-default-deny
+        equal:
+          path: spec.podSelector
+          value: {}
+      - documentSelector:
+          path: metadata.name
+          value: laravel-allow-dns
+        equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: kube-system
+      - documentSelector:
+          path: metadata.name
+          value: laravel-web
+        equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: envoy-gateway-system
+      - documentSelector:
+          path: metadata.name
+          value: laravel-web
+        equal:
+          path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: monitoring
+      - documentSelector:
+          path: metadata.name
+          value: laravel-mysql
+        equal:
+          path: spec.ingress[0].ports[0].port
+          value: 3306
+      - documentSelector:
+          path: metadata.name
+          value: laravel-mysql-clients
+        equal:
+          path: spec.podSelector.matchExpressions[2].values
+          value: [web, migrate, mysql-backup, mysql-restore]
+
+  - it: emits nothing when network policies are disabled
+    values:
+      - ../../ci/values-prod.yaml
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
