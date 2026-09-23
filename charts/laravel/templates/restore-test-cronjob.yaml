@@ -15,6 +15,7 @@ metadata:
 spec:
   schedule: {{ .Values.backup.restoreTestSchedule | quote }}
   concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds }}
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
   jobTemplate:
