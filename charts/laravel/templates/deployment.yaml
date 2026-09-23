@@ -26,6 +26,9 @@ spec:
       labels:
         {{- include "laravel.labels" . | nindent 8 }}
     spec:
+      # preStop sleeps long enough for Envoy to drop the endpoint, then stops
+      # Apache gracefully so in-flight requests complete.
+      terminationGracePeriodSeconds: {{ .Values.termination.gracePeriodSeconds }}
       imagePullSecrets:
         {{- range .Values.image.pullSecrets }}
         - name: {{ . }}
@@ -46,6 +49,10 @@ spec:
           ports:
             - name: http
               containerPort: 80
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ .Values.termination.preStopSeconds }} && apache2ctl -k graceful-stop"]
           envFrom:
             - configMapRef:
                 name: {{ include "laravel.fullname" . }}

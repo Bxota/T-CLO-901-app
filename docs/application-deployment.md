@@ -356,6 +356,31 @@ The port-forward request is the "Service answers" evidence; the port number
 alone only proves the spec. Stop and diagnose an unbound PVC, incomplete
 migration, or non-Healthy Application before any resilience demo.
 
+### Zero-downtime evidence
+
+Three chart settings make a rollout invisible to HTTP clients: the
+`RollingUpdate` strategy replaces one pod at a time and only after the new one is
+Ready; each terminating web pod runs `preStop` (`sleep 5`, then
+`apache2ctl -k graceful-stop`) so Envoy has removed the endpoint before Apache
+stops accepting and in-flight requests finish within
+`terminationGracePeriodSeconds: 30`; a `PodDisruptionBudget` (`minAvailable: 1`,
+rendered only when `replicaCount > 1`) forbids a node drain from evicting the
+last web pod. Measure it during a real rollout from any machine that reaches
+the public hostname:
+
+```bash
+# Terminal 1: probe for 3 minutes, one request every 0.5 s
+scripts/rollout-probe.sh https://app-stage.15.224.195.86.sslip.io/ 180 0.5
+# Terminal 2: trigger the rollout through Git (merge a release) or, for a rehearsal only:
+kubectl -n app-stage rollout restart deployment/laravel
+kubectl -n app-stage rollout status deployment/laravel
+```
+
+Expected: the probe prints `requests=<n> failed=0` and exits 0. Record that line
+with the `rollout status` output. A `kubectl rollout restart` is acceptable for a
+rehearsal but the defence run must come from a Git commit reconciled by Argo CD
+(Argo CD would otherwise revert the restart annotation on its next sync).
+
 ### Session and MySQL persistence check
 
 This check deletes pods, so run it only in the controlled evidence cluster.

@@ -1,0 +1,17 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+# Voluntary disruptions (node drain, cluster upgrade) may never take the last
+# web pod down. Single-replica environments (stage) skip it: a PDB with
+# minAvailable 1 on one replica would block every drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "laravel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "laravel.selectorLabels" . | nindent 6 }}
+{{- end }}
