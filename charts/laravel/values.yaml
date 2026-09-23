@@ -113,6 +113,11 @@ mysql:
     username: app_user
     # Chart 10.3.0 maps this value to the MySQL 8 authentication plugin.
     defaultAuthenticationPlugin: mysql_native_password
+  # The subchart's own NetworkPolicy allows ingress from anywhere by default
+  # (allowExternal); the release-level policies in templates/networkpolicy.yaml
+  # restrict MySQL to this release's pods instead.
+  networkPolicy:
+    enabled: false
   primary:
     persistence:
       enabled: true
@@ -198,3 +203,12 @@ restore:
 metrics:
   enabled: true
   interval: 30s
+
+# Default-deny NetworkPolicies for the release namespace, re-opening only:
+# Envoy Gateway and Prometheus -> web :80, release pods -> MySQL :3306, and
+# CoreDNS for everyone. Enforced by k3s' embedded kube-router controller.
+networkPolicy:
+  enabled: true
+  namespaces:
+    dns: kube-system
+    monitoring: monitoring

@@ -1,0 +1,126 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ns := .Values.networkPolicy.namespaces }}
+# Default deny: every pod of the release namespace loses all ingress and
+# egress; the policies below re-open exactly the flows the application needs.
+# Kubelet probes and NFS mounts are node-originated and are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "laravel.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Every pod may resolve names through CoreDNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "laravel.fullname" . }}-allow-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns.dns }}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Web pods: HTTP from the shared Envoy Gateway and from Prometheus (/metrics).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "laravel.fullname" . }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "laravel.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.route.gateway.namespace }}
+      ports:
+        - port: 80
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns.monitoring }}
+      ports:
+        - port: 80
+          protocol: TCP
+---
+# MySQL: accepts connections only from this release's pods (web, migration,
+# backup, restore). The weekly restore test runs its own mysqld locally and
+# never reaches this Service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mysql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "laravel.commonLabels" . | nindent 14 }}
+      ports:
+        - port: 3306
+          protocol: TCP
+---
+# The pods that talk to MySQL may do so, and nothing else (DNS aside).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "laravel.fullname" . }}-mysql-clients
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "laravel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [laravel]
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [web, migrate, mysql-backup, mysql-restore]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mysql
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: 3306
+          protocol: TCP
+{{- end }}
