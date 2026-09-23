@@ -27,6 +27,23 @@ built through QEMU). An amd64-only image fails on the nodes with
 kubectl get nodes -o custom-columns='NODE:.metadata.name,ARCH:.status.nodeInfo.architecture'
 ```
 
+### Image contents
+
+The `Dockerfile` is a two-stage build on `php:8.2.8-apache`. The `vendor` stage
+holds Composer and `unzip`, runs `composer install --no-dev` then
+`dump-autoload --optimize --classmap-authoritative` and `artisan
+package:discover` under the runtime PHP version; the final stage only adds the
+`pdo_mysql` and `apcu` extensions, the Apache document-root rewrite and a
+`COPY --from=vendor --chown=www-data`. `.dockerignore` keeps `.git`, `vendor`,
+tests, docs, the chart and every `.env` out of the build context. Measured
+locally (arm64): 711 MB before, 535 MB after; no Composer, git, unzip or dev
+dependency (206 packages instead of 290) in the runtime image. Check a built
+image with:
+
+```bash
+docker run --rm ghcr.io/bxota/t-clo-901-app:<tag> sh -c 'php -m | grep -E "^(apcu|pdo_mysql)$"; which composer git unzip || echo clean; test -d vendor/phpunit || echo no-dev-deps'
+```
+
 Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
 access token limited to `write:packages`/`read:packages`. The GHCR packages
 were created by that token and are not linked to the repository, so the
