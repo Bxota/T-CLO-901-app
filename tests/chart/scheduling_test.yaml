@@ -1,0 +1,30 @@
+suite: scheduling and rollout strategy
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: requires web replicas to run on different nodes
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchLabels["app.kubernetes.io/name"]
+          value: laravel
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution
+
+  - it: rolls out without a surge pod so the strict anti-affinity fits two workers
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
