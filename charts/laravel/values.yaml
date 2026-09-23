@@ -154,8 +154,15 @@ bootstrap:
 
 backup:
   enabled: true
-  schedule: "17 2 * * *"
-  restoreTestSchedule: "31 3 * * 0"
+  # The lab VMs are shut down every evening and restarted in the morning, so
+  # maintenance runs in the middle of the day (UTC). A nightly slot would be
+  # missed daily, replayed at boot before MySQL is Ready, fail, and leave the
+  # CronJob (and the Argo CD Application) Degraded until the next success.
+  schedule: "17 12 * * *"
+  restoreTestSchedule: "31 13 * * 1"
+  # A slot missed by more than this (VM off, cluster down) is skipped, not
+  # replayed at the next boot.
+  startingDeadlineSeconds: 900
   # Dumps older than this many days are deleted after each successful dump,
   # so exactly retentionDays daily dumps are kept.
   retentionDays: 7

@@ -1,0 +1,23 @@
+suite: backup CronJob scheduling
+templates:
+  - templates/backup-cronjob.yaml
+  - templates/restore-test-cronjob.yaml
+tests:
+  - it: schedules backups while the lab VMs are powered on and never replays a missed slot at boot
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.schedule
+          value: "17 12 * * *"
+        template: templates/backup-cronjob.yaml
+      - equal:
+          path: spec.schedule
+          value: "31 13 * * 1"
+        template: templates/restore-test-cronjob.yaml
+      - equal:
+          path: spec.startingDeadlineSeconds
+          value: 900
+      - equal:
+          path: spec.concurrencyPolicy
+          value: Forbid

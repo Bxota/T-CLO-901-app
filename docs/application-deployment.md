@@ -209,7 +209,16 @@ migrations run and migrations complete before the Deployment is applied.
 | Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
 | Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
 | Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel`, `ServiceMonitor/laravel`, `HTTPRouteFilter/laravel-metrics-forbidden` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
-| Sync 5 | `CronJob/laravel-mysql-backup`, `CronJob/laravel-mysql-restore-test` | Last wave on purpose: Argo CD reports a CronJob whose latest run failed as Degraded, and every wave waits for the previous ones to be Healthy. A failed nightly backup must never block an application rollout (it did once, see below); the `BackupMissing` alert is the signal instead. |
+| Sync 5 | `CronJob/laravel-mysql-backup`, `CronJob/laravel-mysql-restore-test` | Last wave on purpose: Argo CD reports a CronJob whose latest run failed as Degraded, and every wave waits for the previous ones to be Healthy. A failed backup must never block an application rollout (it did once, see below); the `BackupMissing` alert is the signal instead. |
+
+Both CronJobs run in the middle of the day (UTC): the lab VMs are shut down
+every evening and restarted in the morning, so a nightly slot would be missed
+daily, replayed by the controller at boot before MySQL is Ready, fail, and keep
+the CronJob Degraded until the next success. `startingDeadlineSeconds: 900`
+makes the controller skip any slot missed by more than 15 minutes instead of
+replaying it. The daily backup is at 12:17 UTC (`backup.schedule`), the weekly
+restore test on Monday 13:31 UTC (`backup.restoreTestSchedule`); the
+`BackupMissing` alert fires after 26 hours without a completed backup Job.
 
 If a sync fails with `CronJob has not completed its last execution
 successfully`, Argo CD's health check compares the CronJob's
