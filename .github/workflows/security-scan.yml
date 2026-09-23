@@ -26,7 +26,7 @@ jobs:
           helm template app-stage charts/laravel --namespace app-stage -f ci/values-stage.yaml --set-string image.tag=scan > rendered/stage.yaml
           helm template app charts/laravel --namespace app -f ci/values-prod.yaml --set-string image.tag=scan > rendered/prod.yaml
       - name: Trivy misconfiguration scan (Kubernetes checks, HIGH and CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: rendered
@@ -56,7 +56,7 @@ jobs:
           tags: t-clo-901-app:scan
           cache-from: type=gha
       - name: Trivy vulnerability scan (OS packages and Composer, HIGH and CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: t-clo-901-app:scan
