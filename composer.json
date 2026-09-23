@@ -56,7 +56,16 @@
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
-        "sort-packages": true
+        "sort-packages": true,
+        "policy": {
+            "advisories": {
+                "ignore-id": {
+                    "PKSA-m5cs-t1y6-qpcs": "Laravel 8 is end of life: every stable 8.x is flagged. Accepted to stay on the newest stable 8.83.x instead of the 8.x-dev branch; framework major upgrade tracked separately.",
+                    "PKSA-3r5d-mb8f-1qw9": "Laravel 8 end of life, fixed only in 12.60+ (email rule CRLF). The app has no email validation input.",
+                    "PKSA-8qx3-n5y5-vvnd": "Laravel 8 end of life, fixed only in 10.48.29+ (file validation bypass). The app accepts no uploads."
+                }
+            }
+        }
     },
     "minimum-stability": "dev",
     "prefer-stable": true
