@@ -85,3 +85,14 @@ spec:
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          # Read-only image; Apache still starts as root to bind port 80, then
+          # drops to www-data (no privilege escalation needed for that).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            {{- include "laravel.appWritablePaths" . | nindent 12 }}
+            {{- include "laravel.apacheWritablePaths" . | nindent 12 }}
+      volumes:
+        {{- include "laravel.appWritableVolumes" . | nindent 8 }}
+        {{- include "laravel.apacheWritableVolumes" . | nindent 8 }}

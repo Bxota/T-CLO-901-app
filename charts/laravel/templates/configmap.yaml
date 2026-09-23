@@ -18,3 +18,4 @@ data:
   DB_USERNAME: {{ .Values.env.DB_USERNAME | quote }}
   SESSION_DRIVER: {{ .Values.env.SESSION_DRIVER | quote }}
   SESSION_TABLE: {{ .Values.env.SESSION_TABLE | quote }}
+  LOG_CHANNEL: {{ .Values.env.LOG_CHANNEL | quote }}

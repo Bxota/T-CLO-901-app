@@ -48,3 +48,10 @@ spec:
                   key: {{ .Values.secret.appKeyKey }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            {{- include "laravel.appWritablePaths" . | nindent 12 }}
+      volumes:
+        {{- include "laravel.appWritableVolumes" . | nindent 8 }}

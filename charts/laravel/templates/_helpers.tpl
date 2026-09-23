@@ -56,6 +56,54 @@ seccompProfile:
 
 {{- define "laravel.restrictedContainerSecurityContext" -}}
 allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
 capabilities:
   drop: [ALL]
+{{- end }}
+
+{{/*
+Writable paths of the application image under a read-only root filesystem.
+Each is an emptyDir: Laravel file cache, compiled Blade views, file sessions
+(unused with the database driver, kept for artisan commands), log files
+(unused with LOG_CHANNEL=stderr), PHP's /tmp, and Apache's pid and lock
+directories. bootstrap/cache is generated at build time and stays read-only.
+*/}}
+{{- define "laravel.appWritablePaths" -}}
+- name: tmp
+  mountPath: /tmp
+- name: storage-cache
+  mountPath: /var/www/html/storage/framework/cache
+- name: storage-views
+  mountPath: /var/www/html/storage/framework/views
+- name: storage-sessions
+  mountPath: /var/www/html/storage/framework/sessions
+- name: storage-logs
+  mountPath: /var/www/html/storage/logs
+{{- end }}
+
+{{- define "laravel.apacheWritablePaths" -}}
+- name: apache-run
+  mountPath: /var/run/apache2
+- name: apache-lock
+  mountPath: /var/lock/apache2
+{{- end }}
+
+{{- define "laravel.appWritableVolumes" -}}
+- name: tmp
+  emptyDir: {}
+- name: storage-cache
+  emptyDir: {}
+- name: storage-views
+  emptyDir: {}
+- name: storage-sessions
+  emptyDir: {}
+- name: storage-logs
+  emptyDir: {}
+{{- end }}
+
+{{- define "laravel.apacheWritableVolumes" -}}
+- name: apache-run
+  emptyDir: {}
+- name: apache-lock
+  emptyDir: {}
 {{- end }}

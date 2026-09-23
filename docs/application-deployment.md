@@ -44,6 +44,40 @@ image with:
 docker run --rm ghcr.io/bxota/t-clo-901-app:<tag> sh -c 'php -m | grep -E "^(apcu|pdo_mysql)$"; which composer git unzip || echo clean; test -d vendor/phpunit || echo no-dev-deps'
 ```
 
+### Read-only root filesystem
+
+Every container of the chart runs with `readOnlyRootFilesystem: true`; only
+explicit `emptyDir` volumes are writable:
+
+| Pod | Writable paths |
+| --- | --- |
+| web (`Deployment/laravel`) | `/tmp`, `storage/framework/{cache,views,sessions}`, `storage/logs`, `/var/run/apache2`, `/var/lock/apache2` |
+| migration Job | `/tmp`, `storage/framework/{cache,views,sessions}`, `storage/logs` |
+| backup, restore-test, restore | `/tmp` and their data volumes (unchanged) |
+| EFS bootstrap | the EFS mount only |
+
+`bootstrap/cache` (`packages.php`, `services.php`) is generated at image build
+time and stays read-only. `LOG_CHANNEL=stderr` sends Laravel logs to the
+container output, collected by Alloy into Loki; `storage/logs` stays empty. The
+paths are defined once in `_helpers.tpl` (`laravel.appWritablePaths`,
+`laravel.apacheWritablePaths`). Verified locally before merging with
+`docker run --read-only --security-opt no-new-privileges` and tmpfs on the same
+paths: migrations, `/`, `/metrics`, a 404, Apache's graceful stop and the
+restore-test `mysqld` sequence all work; without `/var/run/apache2` Apache
+fails with `could not create /var/run/apache2/apache2.pid`.
+
+Live check after the stage rollout:
+
+```bash
+kubectl -n app-stage exec deploy/laravel -- sh -c 'touch /var/www/html/x 2>&1; touch /var/www/html/storage/framework/views/x && echo writable-ok'
+# expected: "Read-only file system", then writable-ok
+kubectl -n app-stage logs deploy/laravel --tail=5
+```
+
+If a new feature needs to write somewhere else in the image, the pod fails with
+`Read-only file system` in its logs: add an `emptyDir` for that path in the
+helpers rather than disabling the setting.
+
 ### Artefact security
 
 The `Security scan (chart and image)` workflow runs on every pull request, on
@@ -78,13 +112,14 @@ Baseline recorded on 2026-09-23 (local run, same Trivy checks):
   Laravel advisory IDs under `config.policy.advisories.ignore-id`, each with
   its reason (no email validation, no file upload in this app). Removing them
   requires a framework major upgrade, out of scope before the defence.
-- **Chart.** 10 HIGH misconfigurations, two families: `readOnlyRootFilesystem`
-  not set on any container (Laravel writes to `storage/` and Apache to
-  `/var/run`, so this needs `emptyDir` mounts first), and no
-  `runAsNonRoot` on the web, migrate and EFS bootstrap pods (Apache binds port
-  80 as root then drops to `www-data`; the bootstrap Job must `chown` on EFS).
-  The backup and restore pods already run as UID 999 with all capabilities
-  dropped.
+- **Chart.** 10 HIGH misconfigurations at first, 3 since 2026-09-23. Every
+  container of the chart now runs with `readOnlyRootFilesystem: true` (see
+  Read-only root filesystem below), which cleared the five `KSV-0014`
+  findings and the two container-level `KSV-0118`. The three left are
+  pod-level `runAsNonRoot` on the web Deployment (Apache binds port 80 as
+  root, then its workers run as `www-data`), the EFS bootstrap Job (must
+  `chown` directories on EFS) and the migration Job. The backup and restore
+  pods already run as UID 999 with all capabilities dropped.
 
 To tighten the policy, set `exit-code: '1'` on the `image-vulnerabilities`
 step once the Laravel 8 finding is accepted there too (Trivy `.trivyignore`); the chart scan stays advisory until the

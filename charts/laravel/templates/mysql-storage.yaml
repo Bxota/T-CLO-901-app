@@ -40,6 +40,7 @@ spec:
           # Runs as root on purpose: it must chown EFS directories to their consumer UIDs.
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
               add: [CHOWN, FOWNER, DAC_OVERRIDE]
