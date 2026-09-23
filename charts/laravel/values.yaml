@@ -38,6 +38,9 @@ env:
   DB_USERNAME: app_user
   SESSION_DRIVER: database
   SESSION_TABLE: sessions
+  # Container logs go to stderr, collected by Alloy into Loki; the root
+  # filesystem is read-only and storage/logs is only a scratch emptyDir.
+  LOG_CHANNEL: stderr
 
 secret:
   name: mysql-credentials

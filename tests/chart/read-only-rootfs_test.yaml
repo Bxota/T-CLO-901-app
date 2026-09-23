@@ -1,0 +1,117 @@
+suite: read-only root filesystem
+templates:
+  - templates/deployment.yaml
+  - templates/migration-job.yaml
+  - templates/mysql-storage.yaml
+  - templates/backup-cronjob.yaml
+  - templates/restore-test-cronjob.yaml
+  - templates/restore-job.yaml
+  - templates/configmap.yaml
+tests:
+  - it: runs the web container read-only with writable mounts only where Laravel and Apache write
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 7
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /tmp
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/www/html/storage/framework/cache
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/www/html/storage/framework/views
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/www/html/storage/framework/sessions
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/www/html/storage/logs
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/run/apache2
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /var/lock/apache2
+          any: true
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 7
+
+  - it: runs the migration Job read-only
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/migration-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: runs the EFS bootstrap Job read-only
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/mysql-storage.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: runs the backup and restore-test containers read-only
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+        template: templates/backup-cronjob.yaml
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+        template: templates/restore-test-cronjob.yaml
+
+  - it: runs the break-glass restore Job read-only
+    values:
+      - ../../ci/values-prod.yaml
+    set:
+      restore.enabled: true
+      restore.dumpFile: app-2026-09-23T12-17-00Z.sql.gz
+    template: templates/restore-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: logs to stderr so logs reach Loki instead of a file in the pod
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: data.LOG_CHANNEL
+          value: stderr
