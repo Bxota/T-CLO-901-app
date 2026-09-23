@@ -57,6 +57,15 @@ sealedSecrets:
     encryptedData:
       .dockerconfigjson: ""
 
+# Zero-downtime rollout: a terminating pod first waits for Envoy to remove
+# its endpoint, then stops Apache gracefully; the grace period leaves room
+# for the longest request. The PDB only renders when replicaCount > 1.
+termination:
+  preStopSeconds: 5
+  gracePeriodSeconds: 30
+podDisruptionBudget:
+  minAvailable: 1
+
 probes:
   readiness:
     path: /

@@ -1,0 +1,41 @@
+suite: zero-downtime rollout
+templates:
+  - templates/deployment.yaml
+  - templates/pdb.yaml
+tests:
+  - it: keeps one web pod available during voluntary disruptions
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+        template: templates/pdb.yaml
+      - equal:
+          path: spec.minAvailable
+          value: 1
+        template: templates/pdb.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: web
+        template: templates/pdb.yaml
+
+  - it: drains in-flight requests before Apache stops
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: ["sh", "-c", "sleep 5 && apache2ctl -k graceful-stop"]
+        template: templates/deployment.yaml
+
+  - it: omits the PodDisruptionBudget for single-replica environments
+    values:
+      - ../../ci/values-stage.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/pdb.yaml
