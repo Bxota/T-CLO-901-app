@@ -29,7 +29,7 @@ kubectl get nodes -o custom-columns='NODE:.metadata.name,ARCH:.status.nodeInfo.a
 
 ### Image contents
 
-The `Dockerfile` is a two-stage build on `php:8.2.8-apache`. The `vendor` stage
+The `Dockerfile` is a two-stage build on `php:8.2-apache` (rolling 8.2 patch tag, see Artefact security below for why it is not pinned to a patch release). The `vendor` stage
 holds Composer and `unzip`, runs `composer install --no-dev` then
 `dump-autoload --optimize --classmap-authoritative` and `artisan
 package:discover` under the runtime PHP version; the final stage only adds the
@@ -43,6 +43,44 @@ image with:
 ```bash
 docker run --rm ghcr.io/bxota/t-clo-901-app:<tag> sh -c 'php -m | grep -E "^(apcu|pdo_mysql)$"; which composer git unzip || echo clean; test -d vendor/phpunit || echo no-dev-deps'
 ```
+
+### Artefact security
+
+The `Security scan (chart and image)` workflow runs on every pull request, on
+`main`, weekly (Monday 06:17 UTC) and on demand. It is in **report mode**: the
+findings land in the job summary and as artifacts (`trivy-config`,
+`trivy-image`) and never fail the build. Two scans:
+
+| Job | Tool | Target | Filter |
+| --- | --- | --- | --- |
+| `chart-misconfigurations` | `helm lint --strict` + `trivy config` | the chart rendered with the stage and prod values | Kubernetes checks, HIGH and CRITICAL |
+| `image-vulnerabilities` | `trivy image --scanners vuln` | the image built from the same commit (amd64, not pushed) | HIGH and CRITICAL with an available fix (`ignore-unfixed`) |
+
+Baseline recorded on 2026-09-23 (local run, same Trivy checks):
+
+- **Base image.** Pinned `php:8.2.8-apache` carried 49 CRITICAL and 1872 HIGH
+  OS CVEs, 1640 of them fixable: the tag is a mid-2023 Debian snapshot that
+  never receives updates. Moving to the rolling `php:8.2-apache` tag drops
+  this to 3 CRITICAL and 164 HIGH, none fixable in Debian bookworm (`apt-get
+  upgrade` changes nothing). This is why the base is not pinned to a patch
+  release; reproducibility is provided by the immutable `ghcr.io` tag of each
+  release, not by the base tag.
+- **Composer.** 13 findings with a fix, all in `composer.lock`: `laravel/framework`
+  8.83.27 (fixed in 8.83.28), `symfony/process` 5.4.26 (CRITICAL, fixed in
+  5.4.46), `symfony/http-foundation`, `symfony/mime`, `guzzlehttp/guzzle`,
+  `league/commonmark` 1.6.7 (fixes only in 2.x). A `composer update` within the
+  current constraints followed by `php artisan test` is the follow-up.
+- **Chart.** 10 HIGH misconfigurations, two families: `readOnlyRootFilesystem`
+  not set on any container (Laravel writes to `storage/` and Apache to
+  `/var/run`, so this needs `emptyDir` mounts first), and no
+  `runAsNonRoot` on the web, migrate and EFS bootstrap pods (Apache binds port
+  80 as root then drops to `www-data`; the bootstrap Job must `chown` on EFS).
+  The backup and restore pods already run as UID 999 with all capabilities
+  dropped.
+
+To tighten the policy once the Composer baseline is clean, set `exit-code: '1'`
+on the `image-vulnerabilities` step; the chart scan stays advisory until the
+two families above are addressed.
 
 Both GHCR logins use the repository secret `GHCR_PUSH_TOKEN`, a personal
 access token limited to `write:packages`/`read:packages`. The GHCR packages

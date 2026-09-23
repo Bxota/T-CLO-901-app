@@ -2,7 +2,9 @@
 # Two stages on the same PHP base so `artisan package:discover` runs under the
 # runtime PHP version. The final image carries no Composer, no git/unzip, and
 # no dev dependencies.
-ARG PHP_IMAGE=php:8.2.8-apache
+# Rolling 8.2 patch tag: the pinned 8.2.8 (mid-2023 Debian) carried ~1900
+# HIGH/CRITICAL OS CVEs; the current 8.2.x carries ~160, none fixable in Debian.
+ARG PHP_IMAGE=php:8.2-apache
 
 FROM ${PHP_IMAGE} AS vendor
 WORKDIR /var/www/html
