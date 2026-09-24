@@ -765,3 +765,27 @@ supports OCI charts.
 For rollback, commit an exact chart version such as `1.0.0` to the affected
 child Application, wait for Argo CD to reconcile, and restore the version range
 after a fixed release is published.
+
+
+### Argo CD application deletion and persistent storage
+
+The EFS PVs `mysql-data` and `mysql-backups`, and the `mysql-backups` PVC,
+carry `argocd.argoproj.io/sync-options: Delete=false`. Argo CD must preserve
+these objects when deleting the Application so its replacement can reuse
+the existing bindings. `persistentVolumeReclaimPolicy: Retain` alone protects
+the backing data but does not prevent deletion of the Kubernetes PV object.
+The MySQL data PVC is created by the StatefulSet; its default Kubernetes
+retention behavior is to retain claims when the StatefulSet is deleted.
+
+This protection applies after the updated chart is published and synced.
+It does not cancel an existing `deletionTimestamp`, protect against direct
+`kubectl delete`, or disable pruning when a resource is removed from the chart.
+For a test of Application recreation only, prefer a non-cascading deletion.
+
+A running MySQL Pod with a `Terminating` PVC is not a completed recovery.
+Do not remove PVC protection finalizers while the Pod is using it. Inspect
+the PVC's deletion timestamp, owner references and managed fields, the
+StatefulSet's claim retention policy, and Argo CD's sync result before
+planning a controlled stop and rebind to the same retained EFS directory.
+A missing ConfigMap in an Argo CD `DeletionError` is a separate controller
+error; storage retention does not establish or fix its underlying cause.

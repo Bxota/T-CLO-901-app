@@ -63,6 +63,8 @@ metadata:
     app.kubernetes.io/component: mysql-data
   annotations:
     argocd.argoproj.io/sync-wave: "0"
+    # Retain protects EFS data; Delete=false also preserves the bound PV object.
+    argocd.argoproj.io/sync-options: Delete=false
 spec:
   capacity:
     storage: 20Gi
