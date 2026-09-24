@@ -1,0 +1,25 @@
+suite: persistent storage survives Argo CD application deletion
+templates:
+  - templates/mysql-storage.yaml
+  - templates/backup-storage.yaml
+tests:
+  - it: preserves the MySQL EFS volume
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/mysql-storage.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: Delete=false
+      - equal:
+          path: spec.persistentVolumeReclaimPolicy
+          value: Retain
+  - it: preserves the backup EFS volume and claim
+    values:
+      - ../../ci/values-prod.yaml
+    template: templates/backup-storage.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: Delete=false
