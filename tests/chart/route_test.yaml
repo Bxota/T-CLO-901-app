@@ -1,0 +1,36 @@
+suite: public and internal routes
+templates:
+  - templates/httproute.yaml
+tests:
+  - it: prod is public on app.bxota.com
+    values:
+      - ../../ci/values-prod.yaml
+    asserts:
+      - documentSelector:
+          path: kind
+          value: HTTPRoute
+        equal:
+          path: spec.hostnames
+          value: [app.bxota.com]
+      - documentSelector:
+          path: kind
+          value: HTTPRoute
+        equal:
+          path: spec.parentRefs[0].name
+          value: public-gateway
+  - it: stage is internal on app-stage.bxota.com
+    values:
+      - ../../ci/values-stage.yaml
+    asserts:
+      - documentSelector:
+          path: kind
+          value: HTTPRoute
+        equal:
+          path: spec.hostnames
+          value: [app-stage.bxota.com]
+      - documentSelector:
+          path: kind
+          value: HTTPRoute
+        equal:
+          path: spec.parentRefs[0].name
+          value: internal-gateway

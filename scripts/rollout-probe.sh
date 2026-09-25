@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Hammer a URL while a rollout happens and count non-200 answers.
-# Usage: scripts/rollout-probe.sh https://app-stage.15.224.195.86.sslip.io/ [duration_seconds] [interval_seconds]
+# Usage: scripts/rollout-probe.sh https://app-stage.bxota.com/ [duration_seconds] [interval_seconds]
+# Stage is internal: run it from a laptop on the tailnet.
 # Exit 0 when every request returned 200, 1 otherwise. Prints one line per failure.
 set -euo pipefail
 

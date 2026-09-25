@@ -13,12 +13,13 @@ service:
 
 fullnameOverride: laravel
 
-# Public HTTPS entry point through the shared Envoy Gateway. The hostname must
-# match a dnsNames entry of the Gateway's certificates (infra repository,
-# platform/networking/base/certificates.yaml).
+# Entry point through a shared Envoy Gateway (infra repository,
+# platform/networking). The default is the public gateway; stage attaches to
+# internal-gateway, reachable only from the team's tailnet. The hostname must
+# be a dnsNames entry of that gateway's certificate.
 route:
   enabled: true
-  host: app.15.224.195.86.sslip.io
+  host: app.bxota.com
   gateway:
     name: public-gateway
     namespace: envoy-gateway-system
@@ -30,7 +31,7 @@ env:
   # would change Laravel behaviour.
   APP_DEPLOY_ENV: production
   APP_DEBUG: "false"
-  APP_URL: https://app.15.224.195.86.sslip.io
+  APP_URL: https://app.bxota.com
   DB_CONNECTION: mysql
   DB_HOST: mysql
   DB_PORT: "3306"
