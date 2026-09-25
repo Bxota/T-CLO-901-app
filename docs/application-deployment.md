@@ -306,7 +306,7 @@ migrations run and migrations complete before the Deployment is applied.
 | Sync 1 | Bitnami MySQL (`mysql.commonAnnotations`) | Binds `data-mysql-0` to the PV, then becomes Ready. |
 | Sync 2 | `Job/laravel-mysql-restore-<hash>` (only when `restore.enabled`) | Break-glass restore against the Ready MySQL, before migrations. |
 | Sync 3 | `Job/laravel-migrate` (`BeforeHookCreation`) | `php artisan migrate --force` against the Ready MySQL. The completed Job stays visible until the next sync replaces it. |
-| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel`, `ServiceMonitor/laravel`, `HTTPRouteFilter/laravel-metrics-forbidden` | Rolls out only after migrations succeeded; the route binds `app.15.224.195.86.sslip.io` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
+| Sync 4 | `Deployment/laravel`, `HTTPRoute/laravel`, `ServiceMonitor/laravel`, `HTTPRouteFilter/laravel-metrics-forbidden` | Rolls out only after migrations succeeded; the route binds `app.bxota.com` on the shared `public-gateway` (`envoy-gateway-system`, listener `https`) to `Service/laravel:80`. |
 | Sync 5 | `CronJob/laravel-mysql-backup`, `CronJob/laravel-mysql-restore-test` | Last wave on purpose: Argo CD reports a CronJob whose latest run failed as Degraded, and every wave waits for the previous ones to be Healthy. A failed backup must never block an application rollout (it did once, see below); the `BackupMissing` alert is the signal instead. |
 
 Both CronJobs run in the middle of the day (UTC): the lab VMs are shut down
@@ -383,7 +383,7 @@ Application reaches `Synced`/`Healthy`.
   through an Envoy Gateway `HTTPRouteFilter` (`directResponse`). Verify:
 
   ```bash
-  curl -s -o /dev/null -w '%{http_code}\n' https://app.15.224.195.86.sslip.io/metrics   # 403
+  curl -s -o /dev/null -w '%{http_code}\n' https://app.bxota.com/metrics   # 403
   kubectl -n app exec deploy/laravel -- curl -s localhost/metrics | head -5          # text format
   ```
 
@@ -416,7 +416,7 @@ kubectl -n app rollout status deployment/laravel --timeout=5m
 kubectl -n app get pvc data-mysql-0 mysql-backups
 kubectl -n app get svc laravel -o jsonpath='{.spec.ports[0].port}{"\n"}'
 kubectl -n app get httproute laravel -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{" "}{end}{"\n"}'
-curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n' https://app.15.224.195.86.sslip.io/
+curl --fail --show-error --silent --output /dev/null --write-out '%{http_code}\n' https://app.bxota.com/
 kubectl -n app get endpointslice -l kubernetes.io/service-name=laravel \
   -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.conditions.ready}{"\n"}{end}'
 
@@ -451,7 +451,7 @@ the public hostname:
 
 ```bash
 # Terminal 1: probe for 3 minutes, one request every 0.5 s
-scripts/rollout-probe.sh https://app-stage.15.224.195.86.sslip.io/ 180 0.5
+scripts/rollout-probe.sh https://app-stage.bxota.com/ 180 0.5
 # Terminal 2: trigger the rollout through Git (merge a release) or, for a rehearsal only:
 kubectl -n app-stage rollout restart deployment/laravel
 kubectl -n app-stage rollout status deployment/laravel
@@ -470,7 +470,7 @@ Laravel's `web` middleware and captures the session cookie; `/api/counter/add`
 creates a durable counter record. Use the same cookie jar after each restart:
 
 ```bash
-APP_URL="${APP_URL:-https://app.15.224.195.86.sslip.io}"
+APP_URL="${APP_URL:-https://app.bxota.com}"
 COOKIE_JAR="$(mktemp)"
 
 curl --fail --show-error --cookie-jar "$COOKIE_JAR" "$APP_URL/" >/dev/null
@@ -603,7 +603,7 @@ kubectl -n app exec deploy/laravel -- php -r '$s=@fsockopen("mysql",3306,$e,$m,3
 # MySQL unreachable from another namespace (expected: timeout, exit code non-zero)
 kubectl -n monitoring run np-test --rm -it --restart=Never --image=ghcr.io/bxota/busybox:1.37.0 --command -- nc -zv -w 3 mysql.app.svc.cluster.local 3306
 # Web pods still answer through the Gateway
-curl -fsSI https://app.15.224.195.86.sslip.io/ | head -1
+curl -fsSI https://app.bxota.com/ | head -1
 ```
 
 The `monitoring` namespace has no admission policy, so the test pod above needs
